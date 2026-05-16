@@ -1,0 +1,17 @@
+{
+  "api": {
+    "baseUrl": "http://localhost:3002"
+  },
+  "mqtt": {
+    "mode": "cloud",
+    "cloudUrl": "wss://cloudtat.com:9001/mqtt",
+    "onsiteUrl": "ws://localhost:9001/mqtt",
+    "options": {
+      "keepalive": 30,
+      "username": "tatcloudweb",
+      "password": "nbpjfdt9",
+      "reconnectPeriod": 1000,
+      "connectTimeout": 30000
+    }
+  }
+}

@@ -1,0 +1,243 @@
+Water Meter
+793 : Water Meter Vector Water Meter
+897 : Water Meter IMARI UFM-701
+
+Electric Power Meter 
+3 Phase Power Meter 
+752 : Power Meter ABB M1M 12
+807 : Power Meter ABB M1M 20
+847 : Power Meter ABB M1M 30
+536 : Power Meter ABB M2M(RTU)
+924 : Power Meter ABB M4M 30
+931  : Power Meter Acrel ADL200
+932 : Power Meter Acrel ADL400
+929 : Power Meter Acrel PZ
+244 : Power Meter Acuvim-II
+899 : Power Meter Acuvim-L
+647 : Power Meter CEWE ELITE 440 (v1)
+790 : Power Meter CEWE ELITE 440 (v2)
+802 : Power Meter CEWE ELITE 500
+892 : Power Meter CEWE PROMETER 100
+639 : Power Meter CHAUVIN MEMO P200
+904 : Power Meter CHiNT PD666
+920 : Power Meter CHiNT DTSU666
+615 : Power Meter CIRCUTOR CVM-B100, CVM-B150
+969 : Power Meter CIRCUTOR CVM-C4
+581 : Power Meter CIRCUTOR CVM-C5
+524 : Power Meter CIRCUTOR CVM-C10
+936 : Power Meter CIRCUTOR CVM-C11
+20 : Power Meter Crompton INTEGRA 2000
+165 : Power Meter Crompton INTEGRA 1000
+770 : Power Meter Crompton INTEGRA 1222
+971 : Power Meter Crompton INTEGRA INT1422
+930 : Power Meter DELTA DPM-C510
+
+846 : Power Meter DIGICON DPM-53
+845 : Power Meter DIGICON DPM-55
+
+957 : Power Meter EASTRON SMART-X96
+
+609 : Power Meter EDMi MK6E
+214 : Power Meter EDMi MK6N(1)
+363 : Power Meter EDMi MK6N(2)
+718 : Power Meter EDMi MK6N(3-STAR)
+719 : Power Meter EDMi MK6N(3-DELTA)
+
+913 : Power Meter ENTES EMM-04S (No Power, No Energy)
+912 : Power Meter ENTES EMR-04S (Power, Energy, No Volt, Amp)
+911 : Power Meter ENTES EMM-07S (No THD)
+910 : Power Meter ENTES EMM-53S
+893 : Power Meter Elecnova PD194Z-9HY
+
+332 : Power Meter GTO ECO ENERGY
+331 : Power Meter GTO PDM 3440 THD
+330 : Power Meter GTO RISH MASTER 3480
+974 : Power Meter Huawei SmartPowerSensor DTSU666/DSSU666
+
+
+12 : Power Meter IME 96/35
+160 : Power Meter IME 96HD
+531 : Power Meter KEPLER KP-630D  
+370 : Power Meter KEPLER KP-835(v1)  
+529 : Power Meter KEPLER KP-835(v2)  
+535 : Power Meter KEPLER KP-835(v3)  
+360 : Power Meter KEPLER KP-835S(v2)  
+530 : Power Meter KEPLER KP-835S(v3)  
+726 : Power Meter KEPLER KP-965  
+898 : Power Meter Legrand EMDX3 4 120 47
+948 : Power Meter Lovato DME D111
+404 : Power Meter Lovato DME D320v1 
+652 : Power Meter Lovato DME D320v2
+651 : Power Meter Lovato DME D330
+917 : Power Meter Lovato DMG110
+249 : Power Meter Lovato DMG210 (no PT)
+391 : Power Meter Lovato DMG210 (with PT)
+949 : Power Meter Lovato DMG510
+393 : Power Meter Lovato DMG600/610 (no PT)
+394 : Power Meter Lovato DMG600/610 (with PT)
+547 : Power Meter Lovato DMG600/610 (with PWx10)
+250 : Power Meter Lovato DMG800 (no PT)
+392 : Power Meter Lovato DMG800 (with PT)
+625 : Power Meter Lovato DMG900 (no PT)
+626 : Power Meter Lovato DMG900 (with PT)
+950 : Power Meter Lovato DMG7000
+869 : Power Meter Lovato DMG7500/8000/9000
+
+894 : Power Meter Lovato DMR330T2
+204 : Power Meter Mitsubishi ME96NSR/SSR/SSH/SSE-MB(1)
+762 : Power Meter Mitsubishi ME96NSR/SSR/SSH/SSE-MB(2)
+947 : Power Meter MULTISPAN PQM 14-M1
+
+589 : Power Meter ND Cube300
+319 : Power Meter ND Cube400 
+
+470 : Power Meter Primus KM-06-N (v1)
+919 : Power Meter Primus KM-06-N (v2)
+323 : Power Meter Primus KM-07-2A (no ExportKwhr)
+312 : Power Meter Primus KM-07-2B (w ExportKwhr)
+366 : Power Meter Primus KM-07-3A (w THD/HD)
+367 : Power Meter Primus KM-07-3B (w THD/HD/ExportKwhr)
+951 : Power Meter Primus KM-07-3C (w THD)
+
+907 : Power Meter QUBIX HL-300-3FHMF
+908 : Power Meter QUBIX HL-300-3FMF
+678 : Power Meter QUBIX HL-S96-5 (v1)
+918 : Power Meter QUBIX HL-S96-5 (v2)
+926 : Power Meter QUBIX HL-S96-5 3FHMF
+
+287 : Power Meter RISH Master 3440 THD   
+316 : Power Meter RISH Master 3480
+844 : Power Meter Richtmass RP-1360
+140 : Power Meter Richtmass RP-3430
+161 : Power Meter Richtmass RP-3440
+740 : Power Meter Richtmass RP-3440i
+286 : Power Meter Richtmass RP-3440 THD
+173 : Power Meter Richtmass RP-6100
+
+901 : Power Meter RTR EM96
+686 : Power Meter RTR EM300
+690 : Power Meter RTR EM500
+694 : Power Meter RTR EM700/700E
+
+540 : Power Meter Schneider PM2130
+550 : Power Meter Schneider PM2220
+508 : Power Meter Schneider PM2230
+941 : Power Meter SECURE Elite 30A-2 
+942 : Power Meter SECURE Elite 307-2 
+946 : Power Meter SECURE Elite 500 
+944  : Power Meter SELEC EM4M
+361  : Power Meter SELEC MFM383A(v1)
+362  : Power Meter SELEC MFM383A(v2)
+279  : Power Meter SELEC MFM384(v1)
+555  : Power Meter SELEC MFM384(v2)
+
+621  : Power Meter Sfere 720/720C
+905  : Power Meter Sfere 720A/720B
+225  : Power Meter SIEMENS PAC3100
+220 : Power Meter SIEMENS PAC4200
+809 : Power Meter SIEMENS SMART 7KT
+
+934 : Power Meter SmartEE Mqtt on Cloud
+745 : Power Meter SOCOMEC COUNTIS M43
+837 : Power Meter SOCOMEC COUNTIS M33
+891 : Power Meter SOCOMEC MULTIS M18
+921 : Power Meter YIGEDIANQI YG899E-9SY
+
+Single Phase Power Meter
+357 : Power Meter CIRCUTOR CVM-1D
+925 : DC Meter  Elecnova PD195Z-CD31F
+933 : Power Meter KEPLER KP-230DM
+948 : Power Meter LOVATO DME D111
+890 : Power Meter LOVATO DMR121
+698 : Power Meter RTR EM100
+935 : Power Meter RTR EM110
+687 : Power Meter RTR EM300 (Phase-A)
+688 : Power Meter RTR EM300 (Phase-B)
+689 : Power Meter RTR EM300 (Phase-C)
+691 : Power Meter RTR EM500 (Phase-A)
+692 : Power Meter RTR EM500 (Phase-B)
+693 : Power Meter RTR EM500 (Phase-C)
+695 : Power Meter RTR EM700/700E (Phase-A)
+696 : Power Meter RTR EM700/700E (Phase-B)
+697 : Power Meter RTR EM700/700E (Phase-C)
+945  : Power Meter SELEC EM2M
+
+Counter (not support for CKARE)
+681 : Counter RED LION CUB5 (Ascii Command)
+272 : Counter RED LION PAX P/S (Ascii Command) 
+543 : Counter RED LION PAX P/S (Modbus Protocol)
+952 : Counter RED LION PAX2D (Ascii Command)
+855 : Counter RED LION PAX2D (Modbus Protocol)
+699 : Counter RTR EM300 (3xCounter)
+700 : Counter RTR EM300 (4xCounter)
+701 : Counter RTR EM300 (6xCounter)
+
+Temperature and Humidity Sensor for inside house (รองรับได้ถึง 8 sensors)
+955 : Temperature & Humidity ComWinTop CTH
+940 : Temperature & Humidity EE-one THD
+967 : Temperature & Humidity  ENM CS037
+975 : Temperature & Humidity ENM HMP6011
+968 : Temperature & Humidity  ENM HX-WS
+799 : Temperature & Humidity Primus HM006v2
+962 : Temperature & Humidity QZ RS485 PE
+831 : Temperature & Humidity Sumtech THD-031
+871 : Temperature & Humidity  SENTRONIX THD
+872 : Temperature & Humidity & CO2 SENTRONIX CO2
+247 : Universal Process Controller WEST 4400
+156 : Temperature Controller WEST 6100+
+ 
+Ammonia (NH3) Sensor
+960 : Ammonia ComWinTop CWT NH3 (500ppm)
+833 : Ammonia Sumtech NH3
+873 : Ammonia SENTRONIX NH3
+
+Carbon Dioxide (CO2) Sensor
+959 : CO2 Sensor  ComWinTop CWT CO2
+835 : CO2 Sensor  Sumtech CO2
+872 : CO2 Sensor  SENTRONIX CO2
+
+Carbon Monoxide (CO) Sensor
+963 : CO Sensor CO Transmitter 
+  (CERTEON, Shanghai Chikong)
+
+Methane gas (CH4) Sensor
+964 : CH4 Sensor CH4 Transmitter 
+  (PCBA and Sensor Manufacture)
+
+Oxygen (O2) Sensor
+965 : O2 Sensor O2 Transmitter 
+  (CERTEON, Shanghai Chikong)
+
+TVOC Sensor
+966 : TVOC Sensor TVOC Transmitter 
+  (CERTEON, Shanghai Chikong)
+
+Air Pressure Sensor for inside house (ยกเลิก การใช้งาน)
+834 : Air Pressure Sensor Sumtech APT
+
+Negative Pressure Sensor
+870 : Negative Pressure Sensor LEFOO LFM-11
+976 : Different Pressure Sensor ENM EMAGRFHELIC TS4000
+ 
+Lighting Sensor (วัดความเข้มแสง)
+961 : Light Sensor   ComWinTop CWT SL
+958 : Light Sensor   ComWinTop CWT SLS
+832 : Light Sensor   Sumtech LTH200
+836 : Light Sensor  Sumtech L200
+
+Wind Speed Sensor (วัดความเร็วลม)
+953 : Wind Speed Sensor ComWinTop CWT-SWS
+954 : Wind Speed Sensor ComWinTop CWT-DTAS
+841 : Wind Speed Sensor Sumtech WINDSPD
+794 : Compress Air Flow Sensor VP FlowScope VPS (not in farm)
+970 : Compress Air Flow Sensor VP FlowScope VPM (not in farm)
+972 : Compress Air Flow Sensor Vortex Flow Meter (IVF) (not in farm)
+
+Else…. (not in farm)
+937   : Flow Meter    Endress+Hauser t-mass 65
+859   : Flow Meter    Endress+Hauser t-mass B150
+938   : Flow Meter    Endress+Hauser Proline Promag W300
+943 : Chillers Carrier Screw Water-Cooled  Liquid Chillers
+794 : Compress Air Flow Sensor VP FlowScope VPS (not in farm)
+970 : Compress Air Flow Sensor VP FlowScope VPM (not in farm)
+973 : Compress Air Flow Sensor Vortex Flow Meter (IVF) (not in farm)
