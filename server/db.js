@@ -3,7 +3,7 @@ const sql = require('mssql');
 const config = {
     user: 'userdb',
     password: 'dbpassword',
-    server: '10.0.0.77',
+    server: '10.0.0.218',
     database: 'db_energy_oee',
     options: {
         encrypt: false, // Use true for Azure SQL
