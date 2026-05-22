@@ -18,8 +18,7 @@ app.use(async (req, res, next) => {
         req.db = global.dbPool;
         next();
     } catch (err) {
-        res.status(500).send('Database connection error');
-        return res.sendStatus(403);
+        return res.status(500).send('Database connection error');
     }
 });
 
@@ -223,6 +222,16 @@ const requirePermission = (menuId) => async (req, res, next) => {
 };
 
 // Get Meters - Filtered by user's group/site permissions
+app.get('/api/getallmeters', authenticateToken, async (req, res) => {
+    try {
+        const result = await req.db.request().query('SELECT * FROM dbo.WebSerial');
+        res.json(result.recordset);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send(err.message);
+    }
+});
+
 app.get('/api/meters', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
@@ -5105,6 +5114,419 @@ app.get('/api/permissions/groups', requirePermission(33), async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).send(err.message);
+    }
+});
+
+// ========== USER NOTIFICATION SUBSCRIPTION ==========
+// Opt-in registry: which user wants to RECEIVE notifications, on which channel/device.
+// (Distinct from dbo.Notify, which holds the threshold rules that GENERATE events.)
+
+// Get the current user's subscription status (used to render the Subscribe button state).
+app.get('/api/subscription', authenticateToken, async (req, res) => {
+    try {
+        const result = await req.db.request()
+            .input('userId', sql.UniqueIdentifier, req.user.id)
+            .query(`
+                SELECT subscription_id, channel, destination, device_id, device_label,
+                       scope, scope_value, is_active, created_at, updated_at
+                FROM dbo.UserNotificationSubscription
+                WHERE user_id = @userId AND is_active = 1
+                ORDER BY updated_at DESC
+            `);
+
+        const data = result.recordset.map(row => ({
+            subscriptionId: row.subscription_id,
+            channel: row.channel,
+            destination: row.destination || null,
+            deviceId: row.device_id || null,
+            deviceLabel: row.device_label || null,
+            scope: row.scope,
+            scopeValue: row.scope_value || null,
+            isActive: !!row.is_active,
+            updatedAt: row.updated_at
+        }));
+
+        res.json({ success: true, subscribed: data.length > 0, data });
+    } catch (err) {
+        console.error('Error fetching subscription:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Register / confirm a subscription for the current user.
+// Body (all optional): { channel, destination, deviceId, deviceLabel, scope, scopeValue }
+// Defaults to an in-app, all-scope subscription. Idempotent per (user, channel, destination).
+app.post('/api/subscription', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const {
+            channel = 'inapp',
+            destination = null,
+            deviceId = null,
+            deviceLabel = null,
+            scope = 'all',
+            scopeValue = null
+        } = req.body || {};
+
+        const allowedChannels = ['inapp', 'webpush', 'line', 'sms', 'email', 'desktop', 'ios', 'android'];
+        if (!allowedChannels.includes(channel)) {
+            return res.status(400).json({ success: false, error: `channel must be one of: ${allowedChannels.join(', ')}` });
+        }
+
+        // Find an existing subscription for this device/destination.
+        // The dedup key depends on the channel:
+        //   * channels with a destination (webpush/line/sms/email) -> match on destination
+        //   * channels without one (inapp/desktop) -> match on device_id, so each
+        //     browser/device keeps its own row (true multi-device support)
+        const findReq = req.db.request()
+            .input('userId', sql.UniqueIdentifier, userId)
+            .input('channel', sql.VarChar, channel);
+        let findWhere = 'user_id = @userId AND channel = @channel';
+        if (destination) {
+            findReq.input('destination', sql.NVarChar, String(destination));
+            findWhere += ' AND destination = @destination';
+        } else if (deviceId) {
+            findReq.input('deviceId', sql.NVarChar, String(deviceId));
+            findWhere += ' AND device_id = @deviceId';
+        } else {
+            // No destination and no device_id -> fall back to one row per user+channel
+            findWhere += ' AND destination IS NULL AND device_id IS NULL';
+        }
+        const existing = await findReq.query(
+            `SELECT subscription_id FROM dbo.UserNotificationSubscription WHERE ${findWhere}`
+        );
+
+        if (existing.recordset.length > 0) {
+            const subscriptionId = existing.recordset[0].subscription_id;
+            await req.db.request()
+                .input('subscriptionId', sql.BigInt, subscriptionId)
+                .input('deviceId', sql.NVarChar, deviceId ? String(deviceId) : null)
+                .input('deviceLabel', sql.NVarChar, deviceLabel ? String(deviceLabel) : null)
+                .input('scope', sql.VarChar, String(scope))
+                .input('scopeValue', sql.NVarChar, scopeValue ? String(scopeValue) : null)
+                .query(`
+                    UPDATE dbo.UserNotificationSubscription
+                    SET is_active    = 1,
+                        device_id    = @deviceId,
+                        device_label = @deviceLabel,
+                        scope        = @scope,
+                        scope_value  = @scopeValue,
+                        updated_at   = GETDATE()
+                    WHERE subscription_id = @subscriptionId
+                `);
+            return res.json({ success: true, subscriptionId, message: 'Subscription updated' });
+        }
+
+        const inserted = await req.db.request()
+            .input('userId', sql.UniqueIdentifier, userId)
+            .input('channel', sql.VarChar, channel)
+            .input('destination', sql.NVarChar, destination ? String(destination) : null)
+            .input('deviceId', sql.NVarChar, deviceId ? String(deviceId) : null)
+            .input('deviceLabel', sql.NVarChar, deviceLabel ? String(deviceLabel) : null)
+            .input('scope', sql.VarChar, String(scope))
+            .input('scopeValue', sql.NVarChar, scopeValue ? String(scopeValue) : null)
+            .query(`
+                INSERT INTO dbo.UserNotificationSubscription
+                    (user_id, channel, destination, device_id, device_label, scope, scope_value, is_active, created_at, updated_at)
+                OUTPUT INSERTED.subscription_id
+                VALUES (@userId, @channel, @destination, @deviceId, @deviceLabel, @scope, @scopeValue, 1, GETDATE(), GETDATE())
+            `);
+
+        res.json({ success: true, subscriptionId: inserted.recordset[0].subscription_id, message: 'Subscribed successfully' });
+    } catch (err) {
+        console.error('Error saving subscription:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Unsubscribe (soft) — keeps the row for audit but stops delivery.
+app.delete('/api/subscription/:id', authenticateToken, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) {
+            return res.status(400).json({ success: false, error: 'Invalid subscription id' });
+        }
+        await req.db.request()
+            .input('subscriptionId', sql.BigInt, id)
+            .input('userId', sql.UniqueIdentifier, req.user.id)
+            .query(`
+                UPDATE dbo.UserNotificationSubscription
+                SET is_active = 0, updated_at = GETDATE()
+                WHERE subscription_id = @subscriptionId AND user_id = @userId
+            `);
+        res.json({ success: true, message: 'Unsubscribed successfully' });
+    } catch (err) {
+        console.error('Error unsubscribing:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.get('/api/notify', async (req, res) => {
+    try {
+        const { serials } = req.query; // comma-separated serial names e.g. "Meter1,Meter2"
+
+        if (!serials) {
+            return res.status(400).json({ success: false, error: 'serials query param is required' });
+        }
+
+        const serialList = serials.split(',').map(s => s.trim()).filter(Boolean);
+        if (serialList.length === 0) {
+            return res.status(400).json({ success: false, error: 'serials must not be empty' });
+        }
+
+        const placeholders = serialList.map((_, i) => `@serial${i}`).join(', ');
+        const request = req.db.request();
+        serialList.forEach((serial, i) => {
+            request.input(`serial${i}`, sql.VarChar, serial);
+        });
+
+        const result = await request.query(`
+            SELECT serial_id, serial_name, dbkey, level, point, delay, message, alarm_type
+            FROM dbo.NotifyConfig
+            WHERE serial_name IN (${placeholders})
+        `);
+
+        const data = result.recordset.map(row => ({
+            originalId: row.serial_id,
+            serial: row.serial_name,
+            dbKey: row.dbkey,
+            levelName: row.level,
+            point: parseFloat(row.point) || 0,
+            delay: parseInt(row.delay) || 10,
+            message: row.message || '',
+            alarmType: row.alarm_type || ''
+        }));
+
+        res.json({ success: true, data });
+    } catch (err) {
+        console.error('Error fetching notification settings:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/api/notify', async (req, res) => {
+    try {
+        const notifyData = req.body;
+
+        if (!Array.isArray(notifyData) || notifyData.length === 0) {
+            return res.status(400).json({ success: false, error: 'Invalid notification data - expected non-empty array' });
+        }
+
+        for (const item of notifyData) {
+            if (!item.serial || !item.dbKey || !item.levelName || item.point === undefined || item.delay === undefined || item.originalId === undefined) {
+                return res.status(400).json({ success: false, error: 'Missing required fields: serial, dbKey, levelName, point, delay, originalId' });
+            }
+            if (typeof item.point !== 'number' || typeof item.delay !== 'number') {
+                return res.status(400).json({ success: false, error: 'point and delay must be numbers' });
+            }
+        }
+
+        for (const item of notifyData) {
+            const { serial, mqttSerial, dbKey, levelName, point, delay, message, alarmType, originalId } = item;
+            // Canonical MQTT join key: prefer explicit mqttSerial, else derive from serial.
+            const mqttSerialValue = String(mqttSerial || serial || '').toUpperCase() || null;
+
+            const checkResult = await req.db.request()
+                .input('serialId', sql.Int, parseInt(originalId))
+                .input('dbKey', sql.VarChar, String(dbKey))
+                .input('level', sql.VarChar, String(levelName))
+                .query(`SELECT 1 FROM dbo.NotifyConfig WHERE serial_id = @serialId AND dbkey = @dbKey AND level = @level`);
+
+            if (checkResult.recordset.length > 0) {
+                // Update existing record
+                await req.db.request()
+                    .input('serialId', sql.Int, parseInt(originalId))
+                    .input('serialName', sql.VarChar, String(serial))
+                    .input('mqttSerial', sql.VarChar, mqttSerialValue)
+                    .input('dbKey', sql.VarChar, String(dbKey))
+                    .input('level', sql.VarChar, String(levelName))
+                    .input('point', sql.Decimal(10, 2), parseFloat(point))
+                    .input('delay', sql.Int, parseInt(delay))
+                    .input('message', sql.NVarChar, String(message || ''))
+                    .input('alarmType', sql.VarChar, String(alarmType || ''))
+                    .query(`
+                        UPDATE dbo.NotifyConfig
+                        SET serial_name = @serialName,
+                            mqtt_serial = @mqttSerial,
+                            point       = @point,
+                            delay       = @delay,
+                            message     = @message,
+                            alarm_type  = @alarmType,
+                            updated_at  = GETDATE()
+                        WHERE serial_id = @serialId AND dbkey = @dbKey AND level = @level
+                    `);
+            } else {
+                await req.db.request()
+                    .input('serialId', sql.Int, parseInt(originalId))
+                    .input('serialName', sql.VarChar, String(serial))
+                    .input('mqttSerial', sql.VarChar, mqttSerialValue)
+                    .input('dbKey', sql.VarChar, String(dbKey))
+                    .input('level', sql.VarChar, String(levelName))
+                    .input('point', sql.Decimal(10, 2), parseFloat(point))
+                    .input('delay', sql.Int, parseInt(delay))
+                    .input('message', sql.NVarChar, String(message || ''))
+                    .input('alarmType', sql.VarChar, String(alarmType || ''))
+                    .query(`
+                        INSERT INTO dbo.NotifyConfig (serial_id, serial_name, mqtt_serial, dbkey, level, point, delay, message, alarm_type, created_at, updated_at)
+                        VALUES (@serialId, @serialName, @mqttSerial, @dbKey, @level, @point, @delay, @message, @alarmType, GETDATE(), GETDATE())
+                    `);
+            }
+        }
+
+        res.json({ success: true, message: 'Notification settings saved successfully' });
+    } catch (err) {
+        console.error('Error saving notification settings:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Notify Config module — list all notify configs (grouped by serial on the client)
+app.get('/api/notify/all', async (req, res) => {
+    try {
+        const result = await req.db.request().query(`
+            SELECT notify_id, serial_id, serial_name, dbkey, level, point, delay,
+                   message, alarm_type, status_notify, created_at, updated_at
+            FROM dbo.NotifyConfig
+            ORDER BY serial_id, dbkey, notify_id
+        `);
+
+        const data = result.recordset.map(row => ({
+            notifyId: row.notify_id,
+            serialId: row.serial_id,
+            serialName: row.serial_name,
+            dbKey: row.dbkey,
+            level: row.level,
+            point: parseFloat(row.point) || 0,
+            delay: parseInt(row.delay) || 0,
+            message: row.message || '',
+            alarmType: row.alarm_type || '',
+            statusNotify: row.status_notify,
+            updatedAt: row.updated_at
+        }));
+
+        res.json({ success: true, data });
+    } catch (err) {
+        console.error('Error fetching notify configs:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Bulk-update edited rows for a serial group (point/delay/message/alarm_type only)
+app.post('/api/notify/update', async (req, res) => {
+    try {
+        const rows = req.body;
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+            return res.status(400).json({ success: false, error: 'Expected a non-empty array of rows' });
+        }
+
+        for (const row of rows) {
+            if (row.notifyId === undefined || row.notifyId === null) {
+                return res.status(400).json({ success: false, error: 'Each row requires notifyId' });
+            }
+            if (row.point !== undefined && typeof row.point !== 'number') {
+                return res.status(400).json({ success: false, error: 'point must be a number' });
+            }
+            if (row.delay !== undefined && typeof row.delay !== 'number') {
+                return res.status(400).json({ success: false, error: 'delay must be a number' });
+            }
+        }
+
+        for (const row of rows) {
+            await req.db.request()
+                .input('notifyId', sql.Int, parseInt(row.notifyId))
+                .input('point', sql.Decimal(10, 2), parseFloat(row.point) || 0)
+                .input('delay', sql.Int, parseInt(row.delay) || 0)
+                .input('message', sql.NVarChar, String(row.message || ''))
+                .input('alarmType', sql.VarChar, String(row.alarmType || ''))
+                .query(`
+                    UPDATE dbo.NotifyConfig
+                    SET point      = @point,
+                        delay      = @delay,
+                        message    = @message,
+                        alarm_type = @alarmType,
+                        updated_at = GETDATE()
+                    WHERE notify_id = @notifyId
+                `);
+        }
+
+        res.json({ success: true, message: 'Notify configs updated successfully' });
+    } catch (err) {
+        console.error('Error updating notify configs:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Delete a single notify row
+app.delete('/api/notify/:id', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) {
+            return res.status(400).json({ success: false, error: 'Invalid notify id' });
+        }
+
+        await req.db.request()
+            .input('notifyId', sql.Int, id)
+            .query(`DELETE FROM dbo.NotifyConfig WHERE notify_id = @notifyId`);
+
+        res.json({ success: true, message: 'Notify config deleted successfully' });
+    } catch (err) {
+        console.error('Error deleting notify config:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Notify Log — read-only list of all NotifyLog rows, newest first
+app.get('/api/notify-log', async (req, res) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize) || 50));
+        const offset = (page - 1) * pageSize;
+
+        const countRes = await req.db.request()
+            .query(`SELECT COUNT(*) AS total FROM dbo.NotifyLog`);
+        const total = countRes.recordset[0].total;
+
+        const result = await req.db.request()
+            .input('offset', sql.Int, offset)
+            .input('pageSize', sql.Int, pageSize)
+            .query(`
+                SELECT log_id, notify_id, serial_id, mqtt_serial, gateway_id,
+                       dbkey, level, value, point, message, alarm_type,
+                       event_time, status, sent_at, delivered_count, attempts, created_at
+                FROM dbo.NotifyLog
+                ORDER BY log_id DESC
+                OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+            `);
+
+        res.json({
+            success: true,
+            total,
+            page,
+            pageSize,
+            data: result.recordset.map(r => ({
+                logId: r.log_id,
+                notifyId: r.notify_id,
+                serialId: r.serial_id,
+                mqttSerial: r.mqtt_serial,
+                gatewayId: r.gateway_id,
+                dbkey: r.dbkey,
+                level: r.level,
+                value: r.value != null ? Number(r.value) : null,
+                point: r.point != null ? Number(r.point) : null,
+                message: r.message,
+                alarmType: r.alarm_type,
+                eventTime: r.event_time,
+                status: r.status,
+                sentAt: r.sent_at,
+                deliveredCount: r.delivered_count,
+                attempts: r.attempts,
+                createdAt: r.created_at,
+            }))
+        });
+    } catch (err) {
+        console.error('Error fetching notify log:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

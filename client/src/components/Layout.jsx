@@ -1,13 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Activity, FileText, Settings, LogOut, Menu, X, BarChart2, DollarSign, PieChart, User, Shield, Monitor, Zap, PencilRuler, Leaf, Eye, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { LayoutDashboard, Activity, FileText, Settings, LogOut, Menu, X, BarChart2, DollarSign, PieChart, User, Shield, Monitor, Zap, PencilRuler, Leaf, Eye, ChevronDown, ChevronRight, Search, Bell, BellRing, BellOff, CheckCircle2, Loader2, ClipboardList } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 // Utility for tailwind classes
 function cn(...inputs) {
     return twMerge(clsx(inputs));
+}
+
+// Stable per-browser device identity for notification subscriptions.
+// Generated once, persisted in localStorage, and reused forever so the same
+// browser always maps to the same subscription row (multi-device targeting).
+function getDeviceId() {
+    let id = localStorage.getItem('deviceId');
+    if (!id) {
+        id = (crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        localStorage.setItem('deviceId', id);
+    }
+    return id;
+}
+
+// Human-readable device label (display only, never used for matching).
+function getDeviceLabel() {
+    const ua = navigator.userAgent;
+    const browser = /Edg\//.test(ua) ? 'Edge'
+        : /OPR\//.test(ua) ? 'Opera'
+        : /Chrome\//.test(ua) ? 'Chrome'
+        : /Firefox\//.test(ua) ? 'Firefox'
+        : /Safari\//.test(ua) ? 'Safari'
+        : 'Browser';
+    const os = /Windows/.test(ua) ? 'Windows'
+        : /Android/.test(ua) ? 'Android'
+        : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+        : /Mac OS X/.test(ua) ? 'macOS'
+        : /Linux/.test(ua) ? 'Linux'
+        : 'Unknown OS';
+    return `${browser} on ${os}`;
 }
 
 const Layout = ({ children }) => {
@@ -87,9 +117,92 @@ const Layout = ({ children }) => {
         { path: '/smartboard', label: 'Smartboard', icon: Monitor },
         { path: '/custom-view', label: 'Custom View', icon: PencilRuler },
         { path: '/setting', label: 'Setting', icon: Settings },
+        { path: '/notify-config', label: 'Notify Config', icon: Bell, alwaysShow: true },
+        { path: '/notify-log', label: 'Notify Log', icon: ClipboardList, alwaysShow: true },
     ];
 
     const [user, setUser] = useState(null);
+
+    // --- Notification subscription state ---
+    const [isSubscribed, setIsSubscribed] = useState(false);
+    const [subscriptionId, setSubscriptionId] = useState(null);
+    const [subscribing, setSubscribing] = useState(false); // covers both subscribe & unsubscribe
+    // Hint banner that appears on render then fades away after a few seconds
+    const [showSubHint, setShowSubHint] = useState(false);
+
+    // Check current subscription status on mount
+    useEffect(() => {
+        const checkSubscription = async () => {
+            try {
+                const token = localStorage.getItem('token');
+                if (!token) return;
+                const res = await axios.get('/api/subscription', {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                // Reflect the status of THIS device only (match on our device_id),
+                // so the button doesn't show "subscribed" because of another device.
+                const myDeviceId = getDeviceId();
+                const mine = (res.data?.data || []).find(
+                    s => s.channel === 'inapp' && s.deviceId === myDeviceId
+                );
+                setIsSubscribed(!!mine);
+                setSubscriptionId(mine?.subscriptionId ?? null);
+                // Only nudge users who haven't subscribed on this device yet
+                if (!mine) setShowSubHint(true);
+            } catch (error) {
+                console.error('Error checking subscription:', error);
+            }
+        };
+        checkSubscription();
+    }, []);
+
+    // Auto-hide the hint banner a few seconds after it appears
+    useEffect(() => {
+        if (!showSubHint) return;
+        const timer = setTimeout(() => setShowSubHint(false), 6000);
+        return () => clearTimeout(timer);
+    }, [showSubHint]);
+
+    const handleSubscribe = async () => {
+        if (subscribing) return;
+        setSubscribing(true);
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.post('/api/subscription',
+                { channel: 'inapp', scope: 'all', deviceId: getDeviceId(), deviceLabel: getDeviceLabel() },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setIsSubscribed(true);
+            setSubscriptionId(res.data?.subscriptionId ?? null);
+            setShowSubHint(false);
+        } catch (error) {
+            console.error('Error subscribing:', error);
+        } finally {
+            setSubscribing(false);
+        }
+    };
+
+    const handleUnsubscribe = async () => {
+        if (subscribing || !subscriptionId) return;
+        setSubscribing(true);
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete(`/api/subscription/${subscriptionId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setIsSubscribed(false);
+            setSubscriptionId(null);
+        } catch (error) {
+            console.error('Error unsubscribing:', error);
+        } finally {
+            setSubscribing(false);
+        }
+    };
+
+    const handleToggleSubscribe = () => {
+        if (subscribing) return;
+        return isSubscribed ? handleUnsubscribe() : handleSubscribe();
+    };
 
     useEffect(() => {
         const loadUser = () => {
@@ -119,6 +232,30 @@ const Layout = ({ children }) => {
 
     return (
         <div className="flex min-h-screen bg-slate-900 text-white font-sans">
+
+            {/* Keyframes for the Subscribe button animations */}
+            <style>{`
+                @keyframes sub-swing {
+                    0%, 100% { transform: rotate(0deg); }
+                    20% { transform: rotate(14deg); }
+                    40% { transform: rotate(-11deg); }
+                    60% { transform: rotate(7deg); }
+                    80% { transform: rotate(-4deg); }
+                }
+                @keyframes sub-shimmer {
+                    0% { transform: translateX(-100%); }
+                    100% { transform: translateX(200%); }
+                }
+                @keyframes sub-ping {
+                    0% { transform: scale(1); opacity: 0.7; }
+                    70%, 100% { transform: scale(1.25); opacity: 0; }
+                }
+                @keyframes sub-pop {
+                    0% { transform: scale(0.6); opacity: 0; }
+                    60% { transform: scale(1.12); }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+            `}</style>
 
             {/* Sidebar - Hidden on Custom View */}
             {!isCustomView && (
@@ -167,7 +304,7 @@ const Layout = ({ children }) => {
                                         .filter(item => {
                                             const menuId = menuIds[item.path];
                                             if (item.path === '/profile') return false;
-                                            if (!allowedMenus.includes(menuId)) return false;
+                                            if (!item.alwaysShow && !allowedMenus.includes(menuId)) return false;
                                             if (menuSearch && !item.label.toLowerCase().includes(menuSearch.toLowerCase())) return false;
                                             return true;
                                         })
@@ -305,6 +442,54 @@ const Layout = ({ children }) => {
                                 </div>
                             </div>
 
+                            {/* Subscribe button */}
+                            <button
+                                onClick={handleToggleSubscribe}
+                                disabled={subscribing}
+                                title={isSubscribed ? 'คลิกเพื่อยกเลิกการแจ้งเตือน' : 'สมัครรับการแจ้งเตือน'}
+                                className={cn(
+                                    "group relative flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full",
+                                    "overflow-hidden transition-all duration-300 ease-out disabled:opacity-70",
+                                    isSubscribed
+                                        // Subscribed: green gradient → turns red on hover to signal "cancel"
+                                        ? "text-white bg-gradient-to-r from-emerald-500 to-green-500 shadow-lg shadow-emerald-500/30 hover:from-red-500 hover:to-rose-500 hover:shadow-red-500/30 hover:scale-105 active:scale-95 animate-[sub-pop_0.4s_ease-out]"
+                                        // Idle: brand gradient, lifts + glows on hover
+                                        : "text-white bg-gradient-to-r from-blue-500 to-emerald-500 shadow-lg shadow-blue-500/20 hover:shadow-xl hover:shadow-blue-500/40 hover:scale-105 active:scale-95"
+                                )}
+                            >
+                                {/* Shimmer sweep on hover (idle only) */}
+                                {!isSubscribed && (
+                                    <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent group-hover:animate-[sub-shimmer_0.9s_ease-out]" />
+                                )}
+
+                                {/* Attention ping ring while unsubscribed and idle */}
+                                {!isSubscribed && !subscribing && (
+                                    <span className="pointer-events-none absolute inset-0 rounded-full ring-2 ring-blue-400/60 animate-[sub-ping_2.2s_cubic-bezier(0,0,0.2,1)_infinite]" />
+                                )}
+
+                                <span className="relative flex items-center gap-2">
+                                    {subscribing ? (
+                                        <Loader2 size={18} className="animate-spin" />
+                                    ) : isSubscribed ? (
+                                        <>
+                                            {/* Check by default, switches to bell-off on hover */}
+                                            <CheckCircle2 size={18} className="group-hover:hidden animate-[sub-pop_0.4s_ease-out]" />
+                                            <BellOff size={18} className="hidden group-hover:inline" />
+                                        </>
+                                    ) : (
+                                        <BellRing size={18} className="origin-top group-hover:animate-[sub-swing_0.6s_ease-in-out]" />
+                                    )}
+                                    <span className="hidden md:inline">
+                                        {subscribing
+                                            ? (isSubscribed ? 'กำลังยกเลิก...' : 'กำลังสมัคร...')
+                                            : isSubscribed
+                                                // Label flips to "cancel" on hover
+                                                ? (<><span className="group-hover:hidden">รับการแจ้งเตือนอยู่</span><span className="hidden group-hover:inline">ยกเลิกการแจ้งเตือน</span></>)
+                                                : 'รับการแจ้งเตือน'}
+                                    </span>
+                                </span>
+                            </button>
+
                             {/* Action Buttons - Always Visible */}
                             <Link
                                 to="/profile"
@@ -323,6 +508,26 @@ const Layout = ({ children }) => {
                         </div>
                     )}
                 </header>
+
+                {/* Auto-fading subscription hint — appears on render, disappears after a few seconds */}
+                <div
+                    className={cn(
+                        "fixed top-20 right-6 z-50 max-w-xs transition-all duration-700 ease-in-out",
+                        showSubHint
+                            ? "opacity-100 translate-y-0"
+                            : "opacity-0 -translate-y-2 pointer-events-none"
+                    )}
+                >
+                    <div className="flex items-start gap-3 bg-slate-800 border border-blue-500/40 rounded-xl px-4 py-3 shadow-lg shadow-blue-900/30">
+                        <Bell size={18} className="text-blue-400 mt-0.5 shrink-0" />
+                        <div>
+                            <p className="text-sm font-medium text-white">สมัครรับการแจ้งเตือน</p>
+                            <p className="text-xs text-slate-400 mt-0.5">
+                                กดปุ่ม “รับการแจ้งเตือน” ด้านบนเพื่อรับการแจ้งเตือนแบบเรียลไทม์
+                            </p>
+                        </div>
+                    </div>
+                </div>
 
                 <main className={cn("p-6", isCustomView && "p-0 h-[calc(100vh-64px)] overflow-hidden")}>
                     {children}

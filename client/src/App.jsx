@@ -16,6 +16,8 @@ import Setting from './pages/Setting';
 import Scan from './pages/Scan';
 import CustomView from './pages/CustomView';
 import CarbonCredit from './pages/CarbonCredit';
+import NotifyConfig from './pages/NotifyConfig';
+import NotifyLog from './pages/NotifyLog';
 import SavedViewDisplay from './pages/SavedViewDisplay';
 import AccessDenied from './pages/AccessDenied';
 import Layout from './components/Layout';
@@ -200,6 +202,18 @@ function App() {
                             <Route path="/carbon-credit" element={
                                 <ProtectedRoute>
                                     <CarbonCredit />
+                                </ProtectedRoute>
+                            } />
+
+                            <Route path="/notify-config" element={
+                                <ProtectedRoute>
+                                    <NotifyConfig />
+                                </ProtectedRoute>
+                            } />
+
+                            <Route path="/notify-log" element={
+                                <ProtectedRoute>
+                                    <NotifyLog />
                                 </ProtectedRoute>
                             } />
 

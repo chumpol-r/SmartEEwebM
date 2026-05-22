@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import Autocomplete from '../components/Autocomplete';
-import { Zap, Activity, Clock, Wifi, WifiOff } from 'lucide-react';
+import { Zap, Activity, Clock, Wifi, WifiOff, Bell } from 'lucide-react';
 import MeterCard from '../components/MeterCard';
 import CompareCustomModal from '../components/CompareCustomModal';
+import SetNotifyModal from '../components/SetNotifyModal';
 import mqtt from 'mqtt';
 import { useConfig } from '../contexts/ConfigContext';
 
@@ -17,6 +18,7 @@ const Realtime = () => {
 
     const [selectedMetrics, setSelectedMetrics] = useState([]);
     const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+    const [isSetNotifyModalOpen, setIsSetNotifyModalOpen] = useState(false);
 
     const clientRef = useRef(null);
     const meterMapRef = useRef({}); // Map UpperCase Serial -> Original Serial
@@ -37,6 +39,7 @@ const Realtime = () => {
                 const res = await axios.get('/api/meters', {
                     headers: { Authorization: `Bearer ${token}` }
                 });
+                console.log(res.data);
 
                 // Process meters to match legacy logic:
                 // 1. Use 'serial' column if available, otherwise 'val'
@@ -358,21 +361,36 @@ const Realtime = () => {
                     >
                         Clear
                     </button>
-                    <button 
+                    <button
                         onClick={() => setIsCompareModalOpen(true)}
                         className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-full text-sm font-semibold shadow-lg transition-colors flex items-center gap-2 whitespace-nowrap"
                     >
                         <Activity size={16} /> View History
                     </button>
+                    <button
+                        onClick={() => setIsSetNotifyModalOpen(true)}
+                        className="bg-slate-700 hover:bg-slate-600 text-white px-5 py-2 rounded-full text-sm font-semibold shadow-lg transition-colors flex items-center gap-2 whitespace-nowrap"
+                    >
+                        <Bell size={16} /> Set Notify
+                    </button>
+
                 </div>
             )}
 
             {/* Comparison Modal */}
-            <CompareCustomModal 
+            <CompareCustomModal
                 isOpen={isCompareModalOpen}
                 onClose={() => setIsCompareModalOpen(false)}
                 selectedMetrics={selectedMetrics}
                 onToggleMetric={(metricData, serial, meterId, meterName) => handleToggleMetric(serial, meterId, meterName, metricData)}
+            />
+
+            {/* Set Notify Modal */}
+            <SetNotifyModal
+                isOpen={isSetNotifyModalOpen}
+                onClose={() => setIsSetNotifyModalOpen(false)}
+                title="Set Notify"
+                selectedMetrics={selectedMetrics}
             />
         </>
     );
