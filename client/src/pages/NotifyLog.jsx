@@ -21,7 +21,10 @@ const STATUS_COLORS = {
 
 function fmt(dt) {
     if (!dt) return '-';
-    return new Date(dt).toLocaleString('th-TH', { hour12: false });
+    const match = String(dt).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+    if (!match) return String(dt);
+    const [, year, month, day, hour, min, sec] = match;
+    return `${day}/${month}/${year}, ${hour}:${min}:${sec}`;
 }
 
 function Badge({ value, colorMap }) {
@@ -78,7 +81,7 @@ const NotifyLog = () => {
             'Message':    r.message || '',
             'Alarm Type': r.alarmType || '',
             'Status':     r.status || '',
-            'Event Time': r.eventTime ? new Date(r.eventTime).toLocaleString('th-TH', { hour12: false }) : '',
+            'Event Time': r.eventTime ? fmt(r.eventTime) : '',
         }));
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
@@ -135,7 +138,7 @@ const NotifyLog = () => {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
                     <input
                         type="text"
-                        placeholder="ค้นหา serial / data / level / status / message..."
+                        placeholder="Search by ..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"

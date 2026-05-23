@@ -40,6 +40,17 @@ function getDeviceLabel() {
     return `${browser} on ${os}`;
 }
 
+// Convert a base64url VAPID public key into the Uint8Array that
+// PushManager.subscribe() requires for applicationServerKey.
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = window.atob(base64);
+    const output = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i);
+    return output;
+}
+
 const Layout = ({ children }) => {
     const [isOpen, setIsOpen] = useState(true);
     const [allowedMenus, setAllowedMenus] = useState([]);
@@ -143,7 +154,7 @@ const Layout = ({ children }) => {
                 // so the button doesn't show "subscribed" because of another device.
                 const myDeviceId = getDeviceId();
                 const mine = (res.data?.data || []).find(
-                    s => s.channel === 'inapp' && s.deviceId === myDeviceId
+                    s => s.channel === 'webpush' && s.deviceId === myDeviceId
                 );
                 setIsSubscribed(!!mine);
                 setSubscriptionId(mine?.subscriptionId ?? null);
@@ -165,18 +176,63 @@ const Layout = ({ children }) => {
 
     const handleSubscribe = async () => {
         if (subscribing) return;
+
+        // Web Push needs a service worker + Push API (and a secure context: https or localhost).
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            alert('เบราว์เซอร์นี้ไม่รองรับ Web Push');
+            return;
+        }
+
         setSubscribing(true);
         try {
             const token = localStorage.getItem('token');
+
+            // 1) Ask the OS for notification permission.
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') {
+                console.warn('Notification permission not granted:', permission);
+                return;
+            }
+
+            // 2) Register the service worker (idempotent — returns existing if already there).
+            const registration = await navigator.serviceWorker.register('/sw.js');
+            await navigator.serviceWorker.ready;
+
+            // 3) Fetch the server's VAPID public key.
+            const keyRes = await axios.get('/api/webpush/public-key');
+            const publicKey = keyRes.data?.publicKey;
+            if (!publicKey) throw new Error('Server VAPID public key unavailable');
+
+            // 4) Subscribe via the browser's push service (FCM/APNs/etc).
+            // Drop any stale subscription first — a leftover one bound to a
+            // different VAPID key makes subscribe() throw "applicationServerKey
+            // already exists".
+            const existing = await registration.pushManager.getSubscription();
+            if (existing) await existing.unsubscribe();
+
+            const subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(publicKey),
+            });
+
+            // 5) Persist the subscription on our server (whole object in `destination`).
             const res = await axios.post('/api/subscription',
-                { channel: 'inapp', scope: 'all', deviceId: getDeviceId(), deviceLabel: getDeviceLabel() },
+                {
+                    channel: 'webpush',
+                    destination: JSON.stringify(subscription),
+                    scope: 'all',
+                    deviceId: getDeviceId(),
+                    deviceLabel: getDeviceLabel(),
+                },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
+
             setIsSubscribed(true);
             setSubscriptionId(res.data?.subscriptionId ?? null);
             setShowSubHint(false);
         } catch (error) {
             console.error('Error subscribing:', error);
+            alert('สมัครรับการแจ้งเตือนไม่สำเร็จ: ' + (error.message || error));
         } finally {
             setSubscribing(false);
         }
@@ -187,6 +243,16 @@ const Layout = ({ children }) => {
         setSubscribing(true);
         try {
             const token = localStorage.getItem('token');
+
+            // Tell the browser's push service to drop this endpoint, too.
+            if ('serviceWorker' in navigator) {
+                try {
+                    const registration = await navigator.serviceWorker.ready;
+                    const sub = await registration.pushManager.getSubscription();
+                    if (sub) await sub.unsubscribe();
+                } catch (_) { /* ignore — still deactivate server-side below */ }
+            }
+
             await axios.delete(`/api/subscription/${subscriptionId}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });

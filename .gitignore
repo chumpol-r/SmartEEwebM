@@ -1,3 +1,6 @@
 server/db.js
 server/db.js
 .claude/settings.local.json
+client/public/config/app-config.json
+client/public/config/app-config.json
+client/vite.config.js

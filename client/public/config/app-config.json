@@ -1,6 +1,6 @@
 {
   "api": {
-    "baseUrl": "http://localhost:3002"
+    "baseUrl": ""
   },
   "mqtt": {
     "mode": "cloud",

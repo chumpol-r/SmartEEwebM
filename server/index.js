@@ -1,10 +1,25 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const webpush = require('web-push');
 const { connectToDb, sql } = require('./db');
 const { generateId } = require('./utils/idGenerator');
 
 const app = express();
 const PORT = process.env.PORT || 3002;
+
+// ===== Web Push (VAPID) setup =====
+// Keys come from .env (dev) or host environment variables (production).
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+const webpushEnabled = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (webpushEnabled) {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    console.log('[webpush] VAPID configured');
+} else {
+    console.warn('[webpush] VAPID keys missing — web push disabled (set VAPID_* in .env)');
+}
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -5122,6 +5137,14 @@ app.get('/api/permissions/groups', requirePermission(33), async (req, res) => {
 // (Distinct from dbo.Notify, which holds the threshold rules that GENERATE events.)
 
 // Get the current user's subscription status (used to render the Subscribe button state).
+// Expose the VAPID *public* key so the browser can subscribe. Not a secret.
+app.get('/api/webpush/public-key', (req, res) => {
+    if (!webpushEnabled) {
+        return res.status(503).json({ success: false, error: 'Web push not configured' });
+    }
+    res.json({ success: true, publicKey: VAPID_PUBLIC_KEY });
+});
+
 app.get('/api/subscription', authenticateToken, async (req, res) => {
     try {
         const result = await req.db.request()
@@ -5529,6 +5552,97 @@ app.get('/api/notify-log', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
+// ===== WEB PUSH DISPATCHER =====
+// Polls NotifyLog for pending rows, pushes each to every matching active
+// webpush subscription, then flips the row to 'sent'. Dedup is by row status:
+// one NotifyLog row is delivered exactly once to the subscribers active at
+// that moment (a device that subscribes later won't receive old alerts).
+const WEBPUSH_POLL_MS = 3000;
+let webpushDispatchRunning = false;
+
+async function dispatchWebPush() {
+    if (!webpushEnabled || webpushDispatchRunning || !global.dbPool) return;
+    webpushDispatchRunning = true;
+    try {
+        const pending = await global.dbPool.request().query(`
+            SELECT TOP (50) log_id, mqtt_serial, dbkey, level, value, point,
+                   message, alarm_type, event_time
+            FROM dbo.NotifyLog
+            WHERE status = 'pending'
+            ORDER BY log_id ASC
+        `);
+
+        for (const row of pending.recordset) {
+            // Find active webpush subscriptions that match this serial's scope.
+            const subsRes = await global.dbPool.request()
+                .input('serial', sql.VarChar, String(row.mqtt_serial || '').toUpperCase())
+                .query(`
+                    SELECT subscription_id, destination
+                    FROM dbo.UserNotificationSubscription
+                    WHERE is_active = 1 AND channel = 'webpush' AND destination IS NOT NULL
+                      AND (scope = 'all' OR (scope = 'serial' AND UPPER(scope_value) = @serial))
+                `);
+            const subs = subsRes.recordset;
+
+            const payload = JSON.stringify({
+                title: `${row.mqtt_serial} • ${row.dbkey} ${row.level}`,
+                body: `${row.message || 'Alert'} (value ${row.value}${row.point != null ? `, threshold ${row.point}` : ''})`,
+                tag: `notify-${row.log_id}`,
+                data: { url: '/notify-log', logId: row.log_id, serial: row.mqtt_serial },
+            });
+
+            let delivered = 0;
+            for (const s of subs) {
+                let subscription;
+                try {
+                    subscription = JSON.parse(s.destination);
+                } catch (_) {
+                    continue; // corrupt destination — skip
+                }
+                try {
+                    await webpush.sendNotification(subscription, payload);
+                    delivered++;
+                } catch (err) {
+                    // 404/410 mean the endpoint is dead — deactivate so we stop retrying.
+                    if (err.statusCode === 404 || err.statusCode === 410) {
+                        await global.dbPool.request()
+                            .input('id', sql.BigInt, s.subscription_id)
+                            .query(`UPDATE dbo.UserNotificationSubscription
+                                    SET is_active = 0, updated_at = GETDATE()
+                                    WHERE subscription_id = @id`);
+                        console.log(`[webpush] deactivated dead subscription ${s.subscription_id} (HTTP ${err.statusCode})`);
+                    } else {
+                        console.error(`[webpush] send failed (sub ${s.subscription_id}):`, err.statusCode || err.message);
+                    }
+                }
+            }
+
+            // matched>0 but none delivered -> 'failed'; otherwise 'sent'.
+            const newStatus = (subs.length > 0 && delivered === 0) ? 'failed' : 'sent';
+            await global.dbPool.request()
+                .input('logId', sql.BigInt, row.log_id)
+                .input('count', sql.Int, delivered)
+                .input('status', sql.VarChar, newStatus)
+                .query(`
+                    UPDATE dbo.NotifyLog
+                    SET status = @status, sent_at = GETDATE(),
+                        delivered_count = @count, attempts = attempts + 1
+                    WHERE log_id = @logId
+                `);
+            console.log(`[webpush] log ${row.log_id} ${row.mqtt_serial}/${row.dbkey} ${row.level} -> ${delivered}/${subs.length} device(s) [${newStatus}]`);
+        }
+    } catch (err) {
+        console.error('[webpush dispatch]', err.message);
+    } finally {
+        webpushDispatchRunning = false;
+    }
+}
+
+if (webpushEnabled) {
+    setInterval(dispatchWebPush, WEBPUSH_POLL_MS);
+    console.log(`[webpush] dispatcher started (every ${WEBPUSH_POLL_MS}ms)`);
+}
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
