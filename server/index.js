@@ -5480,6 +5480,230 @@ app.post('/api/notify/update', async (req, res) => {
     }
 });
 
+// Atomic save — creates + updates wrapped in a single DB transaction.
+// Body: { creates: [{serial, mqttSerial?, dbKey, levelName, point, delay, message, alarmType, originalId}],
+//         updates: [{notifyId, updatedAt, point, delay, message, alarmType}] }
+// Each update REQUIRES `updatedAt` (ISO string from the original GET). The UPDATE
+// is gated on `notify_id AND updated_at = @originalUpdatedAt` so a concurrent edit
+// from another user causes 0 rows affected → we throw and roll back the whole tx
+// (lost-update protection via optimistic locking).
+// Any failure (validation, UNIQUE collision, stale row, DB error) rolls back BOTH sets.
+const NC_VALID_LEVELS = ['Very High', 'High', 'Normal', 'Low', 'Very Low'];
+const NC_VALID_ALARM_TYPES = ['Dialog', 'Email', 'SMS', ''];
+app.post('/api/notify/save', async (req, res) => {
+    const { creates = [], updates = [] } = req.body || {};
+
+    if (!Array.isArray(creates) || !Array.isArray(updates)) {
+        return res.status(400).json({ success: false, error: 'creates and updates must be arrays' });
+    }
+    if (creates.length === 0 && updates.length === 0) {
+        return res.status(400).json({ success: false, error: 'Nothing to save' });
+    }
+
+    // --- Validate creates ---
+    for (const c of creates) {
+        if (!c.serial || !c.dbKey || !c.levelName || c.point === undefined || c.delay === undefined || c.originalId === undefined) {
+            return res.status(400).json({ success: false, error: 'create row missing required fields (serial, dbKey, levelName, point, delay, originalId)' });
+        }
+        if (!NC_VALID_LEVELS.includes(c.levelName)) {
+            return res.status(400).json({ success: false, error: `Invalid level: "${c.levelName}" (must be one of ${NC_VALID_LEVELS.join(', ')})` });
+        }
+        if (!NC_VALID_ALARM_TYPES.includes(c.alarmType ?? '')) {
+            return res.status(400).json({ success: false, error: `Invalid alarmType: "${c.alarmType}" (must be one of ${NC_VALID_ALARM_TYPES.filter(Boolean).join(', ')} or empty)` });
+        }
+        if (typeof c.point !== 'number' || Number.isNaN(c.point)) {
+            return res.status(400).json({ success: false, error: `create row (${c.dbKey}/${c.levelName}): point must be a number` });
+        }
+        if (typeof c.delay !== 'number' || !Number.isInteger(c.delay) || c.delay < 0) {
+            return res.status(400).json({ success: false, error: `create row (${c.dbKey}/${c.levelName}): delay must be a non-negative integer` });
+        }
+    }
+
+    // --- Validate updates ---
+    for (const u of updates) {
+        if (u.notifyId === undefined || u.notifyId === null) {
+            return res.status(400).json({ success: false, error: 'update row missing notifyId' });
+        }
+        if (!u.updatedAt) {
+            return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}) missing updatedAt — required for lost-update protection` });
+        }
+        if (u.alarmType !== undefined && !NC_VALID_ALARM_TYPES.includes(u.alarmType ?? '')) {
+            return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}): invalid alarmType "${u.alarmType}"` });
+        }
+        if (u.point !== undefined && (typeof u.point !== 'number' || Number.isNaN(u.point))) {
+            return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}): point must be a number` });
+        }
+        if (u.delay !== undefined && (typeof u.delay !== 'number' || !Number.isInteger(u.delay) || u.delay < 0)) {
+            return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}): delay must be a non-negative integer` });
+        }
+    }
+
+    const tx = new sql.Transaction(req.db);
+    let txStarted = false;
+    try {
+        await tx.begin();
+        txStarted = true;
+
+        // 0) Monotonic validation (Model B): for every (serialId, dbKey) touched by
+        //    this save, build the POST-SAVE state by reading current DB rows and
+        //    overlaying creates+updates from the payload, then enforce:
+        //      Very Low ≤ Low      (lower pair)
+        //      High    ≤ Very High (upper pair)
+        //    Defense-in-depth — frontend blocks save too, but direct API calls
+        //    must not be able to bypass this.
+        if (updates.length > 0 || creates.length > 0) {
+            // Fetch (serial_id, dbkey, level) metadata for updates (payload only has notifyId)
+            const metaById = {};
+            if (updates.length > 0) {
+                const idList = updates.map(u => parseInt(u.notifyId)).filter(n => Number.isFinite(n));
+                if (idList.length > 0) {
+                    const metaRes = await new sql.Request(tx).query(`
+                        SELECT notify_id, serial_id, dbkey, level
+                        FROM dbo.NotifyConfig
+                        WHERE notify_id IN (${idList.join(',')})
+                    `);
+                    metaRes.recordset.forEach(m => { metaById[m.notify_id] = m; });
+                }
+            }
+
+            // Collect affected (serialId, dbKey) pairs
+            const affected = new Set();
+            for (const c of creates) affected.add(`${parseInt(c.originalId)}|${c.dbKey}`);
+            for (const u of updates) {
+                const m = metaById[parseInt(u.notifyId)];
+                if (m) affected.add(`${m.serial_id}|${m.dbkey}`);
+            }
+
+            for (const key of affected) {
+                const sep = key.indexOf('|');
+                const serialId = parseInt(key.slice(0, sep));
+                const dbKey = key.slice(sep + 1);
+
+                // Read current state for this group
+                const cur = await new sql.Request(tx)
+                    .input('serialId', sql.Int, serialId)
+                    .input('dbKey', sql.VarChar, dbKey)
+                    .query(`SELECT notify_id, level, point FROM dbo.NotifyConfig WHERE serial_id = @serialId AND dbkey = @dbKey`);
+
+                // Build post-save: { level → point }
+                const post = {};
+                cur.recordset.forEach(r => { post[r.level] = parseFloat(r.point); });
+                for (const u of updates) {
+                    const m = metaById[parseInt(u.notifyId)];
+                    if (m && m.serial_id === serialId && m.dbkey === dbKey) {
+                        post[m.level] = parseFloat(u.point);
+                    }
+                }
+                for (const c of creates) {
+                    if (parseInt(c.originalId) === serialId && c.dbKey === dbKey) {
+                        post[c.levelName] = parseFloat(c.point);
+                    }
+                }
+
+                // Check pairs (only if both ends present)
+                const vh = post['Very High'], h = post['High'];
+                if (vh !== undefined && h !== undefined && h > vh) {
+                    const err = new Error(`${dbKey}: High (${h}) ต้อง ≤ Very High (${vh})`);
+                    err.code = 'MONOTONIC';
+                    throw err;
+                }
+                const l = post['Low'], vl = post['Very Low'];
+                if (l !== undefined && vl !== undefined && vl > l) {
+                    const err = new Error(`${dbKey}: Very Low (${vl}) ต้อง ≤ Low (${l})`);
+                    err.code = 'MONOTONIC';
+                    throw err;
+                }
+            }
+        }
+
+        // 1) Updates first — gated on updated_at to catch concurrent edits.
+        for (const u of updates) {
+            const result = await new sql.Request(tx)
+                .input('notifyId', sql.Int, parseInt(u.notifyId))
+                .input('originalUpdatedAt', sql.DateTime2, new Date(u.updatedAt))
+                .input('point', sql.Decimal(10, 2), parseFloat(u.point) || 0)
+                .input('delay', sql.Int, parseInt(u.delay) || 0)
+                .input('message', sql.NVarChar, String(u.message || ''))
+                .input('alarmType', sql.VarChar, String(u.alarmType || ''))
+                .query(`
+                    UPDATE dbo.NotifyConfig
+                    SET point      = @point,
+                        delay      = @delay,
+                        message    = @message,
+                        alarm_type = @alarmType,
+                        updated_at = GETDATE()
+                    WHERE notify_id = @notifyId
+                      AND updated_at = @originalUpdatedAt
+                `);
+            if (result.rowsAffected[0] === 0) {
+                // Distinguish "deleted by other user" from "modified by other user"
+                const exists = await new sql.Request(tx)
+                    .input('notifyId', sql.Int, parseInt(u.notifyId))
+                    .query(`SELECT 1 FROM dbo.NotifyConfig WHERE notify_id = @notifyId`);
+                const err = new Error(
+                    exists.recordset.length === 0
+                        ? `Row (notifyId=${u.notifyId}) ถูกลบโดยผู้ใช้อื่น กรุณา refresh`
+                        : `Row (notifyId=${u.notifyId}) ถูกแก้ไขโดยผู้ใช้อื่น กรุณา refresh แล้วลองใหม่`
+                );
+                err.code = 'CONFLICT';
+                throw err;
+            }
+        }
+
+        // 2) Creates — straight INSERT (no upsert here; UNIQUE constraint guards duplicates
+        //    and the transaction rolls back cleanly if any collision occurs).
+        for (const c of creates) {
+            const mqttSerialValue = String(c.mqttSerial || c.serial || '').toUpperCase() || null;
+            await new sql.Request(tx)
+                .input('serialId', sql.Int, parseInt(c.originalId))
+                .input('serialName', sql.VarChar, String(c.serial))
+                .input('mqttSerial', sql.VarChar, mqttSerialValue)
+                .input('dbKey', sql.VarChar, String(c.dbKey))
+                .input('level', sql.VarChar, String(c.levelName))
+                .input('point', sql.Decimal(10, 2), parseFloat(c.point) || 0)
+                .input('delay', sql.Int, parseInt(c.delay) || 0)
+                .input('message', sql.NVarChar, String(c.message || ''))
+                .input('alarmType', sql.VarChar, String(c.alarmType || ''))
+                .query(`
+                    INSERT INTO dbo.NotifyConfig (serial_id, serial_name, mqtt_serial, dbkey, level, point, delay, message, alarm_type, created_at, updated_at)
+                    VALUES (@serialId, @serialName, @mqttSerial, @dbKey, @level, @point, @delay, @message, @alarmType, GETDATE(), GETDATE())
+                `);
+        }
+
+        await tx.commit();
+        res.json({
+            success: true,
+            message: 'Notify configs saved atomically',
+            createsCount: creates.length,
+            updatesCount: updates.length
+        });
+    } catch (err) {
+        if (txStarted) {
+            try { await tx.rollback(); } catch (e) { console.error('Rollback failed:', e); }
+        }
+        console.error('Error saving notify configs (atomic):', err);
+        // Map known errors to friendly status + Thai messages:
+        //   CONFLICT    → 409 (optimistic-lock — row changed by another user)
+        //   MONOTONIC   → 422 (Model B point-ordering violation)
+        //   UNIQUE      → 409 (duplicate level for same serialId+dbKey)
+        const isConflict = err.code === 'CONFLICT';
+        const isMonotonic = err.code === 'MONOTONIC';
+        const isUnique = /UNIQUE KEY|duplicate key|Cannot insert duplicate/i.test(err.message || '');
+        let status = 500;
+        let friendly = err.message;
+        if (isConflict) {
+            status = 409;
+        } else if (isMonotonic) {
+            status = 422;
+            friendly = `ค่า point ไม่ถูกต้อง: ${err.message}`;
+        } else if (isUnique) {
+            status = 409;
+            friendly = 'Level นี้ถูกเพิ่มโดยผู้ใช้อื่นแล้ว กรุณา refresh แล้วลองใหม่';
+        }
+        res.status(status).json({ success: false, error: friendly });
+    }
+});
+
 // Delete a single notify row
 app.delete('/api/notify/:id', async (req, res) => {
     try {

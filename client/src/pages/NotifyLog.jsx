@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { ClipboardList, RefreshCw, ChevronLeft, ChevronRight, Search, FileDown } from 'lucide-react';
+import { ClipboardList, RefreshCw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, FileDown, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const PAGE_SIZE = 50;
@@ -36,12 +36,97 @@ function Badge({ value, colorMap }) {
     );
 }
 
+// --- Date range helpers ---
+// We compare on the raw `YYYY-MM-DDTHH:MM` substring (no timezone math) so the
+// range matches exactly what `fmt()` displays — keeps client-side filtering
+// consistent with the grid no matter how mssql formats the ISO output.
+function pad2(n) { return String(n).padStart(2, '0'); }
+function todayStartInput() {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T00:00`;
+}
+function todayEndInput() {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T23:59`;
+}
+function toMinuteKey(s) {
+    if (!s) return null;
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}` : null;
+}
+// Render "2026-05-23T14:30" as "23/05/2026 14:30" (browser-locale-independent).
+function fmtKeyDisplay(key) {
+    const m = key && key.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}` : '';
+}
+
+// Custom field: shows dd/mm/yyyy HH:MM in a readOnly text box, opens the
+// native datetime-local picker on click. Browsers won't let us override the
+// native input's display format, so we layer a text input on top.
+function DateTimeField({ value, onChange }) {
+    const pickerRef = useRef(null);
+    const openPicker = () => {
+        const el = pickerRef.current;
+        if (!el) return;
+        if (typeof el.showPicker === 'function') {
+            try { el.showPicker(); } catch { el.focus(); }
+        } else {
+            el.focus();
+        }
+    };
+    return (
+        <div className="relative inline-block">
+            <input
+                type="text"
+                readOnly
+                value={fmtKeyDisplay(value)}
+                placeholder="dd/mm/yyyy HH:MM"
+                onClick={openPicker}
+                onFocus={openPicker}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); } }}
+                className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 cursor-pointer w-44"
+            />
+            <input
+                ref={pickerRef}
+                type="datetime-local"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                aria-hidden="true"
+                tabIndex={-1}
+                className="absolute inset-0 w-full h-full opacity-0 pointer-events-none"
+            />
+        </div>
+    );
+}
+// NOTE: If NotifyLog grows past ~10k rows this filter should move server-side
+// (add fromDate/toDate query params + an index on event_time DESC).
+
 const NotifyLog = () => {
     const [rows, setRows] = useState([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
+    const [pageInput, setPageInput] = useState('1');
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [fromDate, setFromDate] = useState(todayStartInput);
+    const [toDate, setToDate] = useState(todayEndInput);
+
+    // Keep pageInput in sync when page changes externally (Prev/Next/First/Last).
+    useEffect(() => { setPageInput(String(page)); }, [page]);
+
+    const commitPageInput = () => {
+        const v = parseInt(pageInput, 10);
+        if (!Number.isNaN(v)) setPage(Math.max(1, Math.min(totalPages, v)));
+        else setPageInput(String(page));
+    };
+
+    // 200ms debounce so the spinner has meaning and we re-filter once per pause.
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(searchTerm), 200);
+        return () => clearTimeout(t);
+    }, [searchTerm]);
+    const isSearching = searchTerm !== debouncedSearch;
 
     const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
 
@@ -68,7 +153,15 @@ const NotifyLog = () => {
 
     const handleRefresh = () => {
         setSearchTerm('');
+        setDebouncedSearch('');
+        setFromDate(todayStartInput());
+        setToDate(todayEndInput());
         fetchPage(page, true);
+    };
+
+    const handleClearRange = () => {
+        setFromDate('');
+        setToDate('');
     };
 
     const handleExportExcel = () => {
@@ -90,23 +183,40 @@ const NotifyLog = () => {
         XLSX.writeFile(wb, fileName);
     };
 
-    // Client-side search across key fields
-    const search = searchTerm.trim().toLowerCase();
-    const filteredRows = search
-        ? rows.filter(r =>
-            (r.mqttSerial || '').toLowerCase().includes(search) ||
-            (r.dbkey || '').toLowerCase().includes(search) ||
-            (r.level || '').toLowerCase().includes(search) ||
-            (r.message || '').toLowerCase().includes(search) ||
-            (r.alarmType || '').toLowerCase().includes(search) ||
-            (r.status || '').toLowerCase().includes(search)
-        )
-        : rows;
+    // Client-side filtering: date range first (only when both ends are set),
+    // then text search. String-key comparison on YYYY-MM-DDTHH:MM avoids any
+    // timezone conversion so the range matches what `fmt()` renders.
+    const search = debouncedSearch.trim().toLowerCase();
+    const fromKey = toMinuteKey(fromDate);
+    const toKey = toMinuteKey(toDate);
+    const dateRangeActive = !!(fromKey && toKey);
+    const invalidRange = dateRangeActive && fromKey > toKey;
 
+    const filteredRows = rows.filter(r => {
+        // 1) date range — both ends required
+        if (dateRangeActive && !invalidRange) {
+            const k = toMinuteKey(r.eventTime);
+            if (!k || k < fromKey || k > toKey) return false;
+        }
+        // 2) text search
+        if (search) {
+            const hit =
+                (r.mqttSerial || '').toLowerCase().includes(search) ||
+                (r.dbkey || '').toLowerCase().includes(search) ||
+                (r.level || '').toLowerCase().includes(search) ||
+                (r.message || '').toLowerCase().includes(search) ||
+                (r.alarmType || '').toLowerCase().includes(search) ||
+                (r.status || '').toLowerCase().includes(search);
+            if (!hit) return false;
+        }
+        return true;
+    });
+
+    // 100dvh - 7rem = Layout header (h-16 = 4rem) + Layout p-6 vertical padding (3rem). Adjust if Layout changes.
     return (
-        <div className="space-y-6 max-w-full">
+        <div className="h-[calc(100dvh-7rem)] flex flex-col gap-4 max-w-full">
             {/* Header */}
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center shrink-0">
                 <div>
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                         <ClipboardList size={24} /> Notify Log
@@ -132,26 +242,55 @@ const NotifyLog = () => {
                 </div>
             </div>
 
-            {/* Search Bar */}
-            <div className="flex gap-4 bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                    <input
-                        type="text"
-                        placeholder="Search by ..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
-                    />
+            {/* Search Bar + Date Range */}
+            <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3 shrink-0">
+                <div className="flex gap-3 flex-wrap items-center">
+                    <div className="relative flex-1 min-w-60">
+                        {isSearching ? (
+                            <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 animate-spin" size={20} />
+                        ) : (
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                        )}
+                        <input
+                            type="text"
+                            placeholder="Search by ..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                        <label className="text-slate-400 text-xs">From</label>
+                        <DateTimeField value={fromDate} onChange={setFromDate} />
+                        <span className="text-slate-500">→</span>
+                        <label className="text-slate-400 text-xs">To</label>
+                        <DateTimeField value={toDate} onChange={setToDate} />
+                        <button
+                            onClick={handleClearRange}
+                            disabled={!fromDate && !toDate}
+                            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm transition-colors"
+                            title="Clear date range"
+                        >
+                            Clear
+                        </button>
+                    </div>
                 </div>
+                {invalidRange && (
+                    <p className="text-amber-400 text-xs">⚠ ช่วงเวลาไม่ถูกต้อง: From มากกว่า To (filter ถูกข้าม)</p>
+                )}
+                {dateRangeActive && !invalidRange && (
+                    <p className="text-slate-500 text-xs">
+                        กรองช่วง <span className="text-cyan-400">{fmtKeyDisplay(fromKey)}</span> → <span className="text-cyan-400">{fmtKeyDisplay(toKey)}</span>
+                    </p>
+                )}
             </div>
 
-            {/* Table */}
-            <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                <div className="overflow-x-auto">
+            {/* Table — grows to fill, scrolls internally */}
+            <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden flex-1 min-h-0 flex flex-col">
+                <div className="flex-1 min-h-0 overflow-auto">
                     <table className="w-full text-left text-sm">
-                        <thead>
-                            <tr className="bg-slate-900/50 border-b border-slate-700 text-slate-400 font-medium">
+                        <thead className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm">
+                            <tr className="border-b border-slate-700 text-slate-400 font-medium">
                                 <th className="px-3 py-3 whitespace-nowrap">Serial</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Data</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Level</th>
@@ -174,7 +313,39 @@ const NotifyLog = () => {
                             ) : filteredRows.length === 0 ? (
                                 <tr>
                                     <td colSpan="9" className="py-12 text-center text-slate-400">
-                                        {search ? `ไม่พบข้อมูลที่ตรงกับ "${searchTerm}"` : 'ไม่มีข้อมูล'}
+                                        {search && dateRangeActive && !invalidRange ? (
+                                            <>
+                                                <div className="mb-2">
+                                                    ไม่พบ <span className="text-white">&quot;{searchTerm}&quot;</span> ในช่วง{' '}
+                                                    <span className="text-cyan-400">{fmtKeyDisplay(fromKey)}</span> →{' '}
+                                                    <span className="text-cyan-400">{fmtKeyDisplay(toKey)}</span>
+                                                </div>
+                                                <button
+                                                    onClick={handleClearRange}
+                                                    className="text-cyan-400 hover:text-cyan-300 underline text-xs"
+                                                >
+                                                    ค้นหาทั้งหมด (ล้างช่วงเวลา)
+                                                </button>
+                                            </>
+                                        ) : search ? (
+                                            <>ไม่พบข้อมูลที่ตรงกับ &quot;{searchTerm}&quot;</>
+                                        ) : dateRangeActive && !invalidRange ? (
+                                            <>
+                                                <div className="mb-2">
+                                                    ไม่มีข้อมูลในช่วง{' '}
+                                                    <span className="text-cyan-400">{fmtKeyDisplay(fromKey)}</span> →{' '}
+                                                    <span className="text-cyan-400">{fmtKeyDisplay(toKey)}</span>
+                                                </div>
+                                                <button
+                                                    onClick={handleClearRange}
+                                                    className="text-cyan-400 hover:text-cyan-300 underline text-xs"
+                                                >
+                                                    ดูข้อมูลทั้งหมด (ล้างช่วงเวลา)
+                                                </button>
+                                            </>
+                                        ) : (
+                                            'ไม่มีข้อมูล'
+                                        )}
                                     </td>
                                 </tr>
                             ) : (
@@ -209,27 +380,62 @@ const NotifyLog = () => {
                     </table>
                 </div>
 
-                {/* Pagination */}
-                <div className="px-4 py-3 border-t border-slate-700 flex items-center justify-between text-sm text-slate-400">
+                {/* Pagination — pinned at bottom of card */}
+                <div className="shrink-0 px-4 py-3 border-t border-slate-700 flex items-center justify-between text-sm text-slate-400 bg-slate-900/30">
                     <span>
-                        หน้า {page} / {totalPages}
-                        &nbsp;(แสดง {filteredRows.length}{search ? ` จากที่กรองแล้ว` : ` จาก ${total}`} รายการ)
+                        แสดง <span className="text-white font-semibold">{filteredRows.length}</span>
+                        {search || dateRangeActive
+                            ? <> รายการ (กรองแล้ว จาก {rows.length} ในหน้านี้)</>
+                            : <> จาก <span className="text-white font-semibold">{total}</span> รายการทั้งหมด</>}
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={() => setPage(1)}
+                            disabled={page === 1}
+                            className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            title="หน้าแรก"
+                        >
+                            <ChevronsLeft size={18} />
+                        </button>
                         <button
                             onClick={() => setPage(p => Math.max(1, p - 1))}
                             disabled={page === 1}
                             className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            title="ก่อนหน้า"
                         >
                             <ChevronLeft size={18} />
                         </button>
-                        <span className="px-2 py-1 bg-slate-900 rounded font-mono">{page}</span>
+                        <span className="flex items-center gap-1 mx-1 text-slate-400">
+                            หน้า
+                            <input
+                                type="number"
+                                min={1}
+                                max={totalPages}
+                                value={pageInput}
+                                onChange={(e) => setPageInput(e.target.value)}
+                                onBlur={commitPageInput}
+                                onKeyDown={(e) => { if (e.key === 'Enter') commitPageInput(); }}
+                                aria-label="ระบุเลขหน้าเพื่อกระโดด"
+                                className="w-14 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-white font-mono text-sm focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                            <span className="text-slate-500">/</span>
+                            <span className="font-mono text-slate-300">{totalPages}</span>
+                        </span>
                         <button
                             onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                             disabled={page === totalPages}
                             className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            title="ถัดไป"
                         >
                             <ChevronRight size={18} />
+                        </button>
+                        <button
+                            onClick={() => setPage(totalPages)}
+                            disabled={page === totalPages}
+                            className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            title="หน้าสุดท้าย"
+                        >
+                            <ChevronsRight size={18} />
                         </button>
                     </div>
                 </div>
