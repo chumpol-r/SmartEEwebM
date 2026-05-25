@@ -8,6 +8,9 @@ yarn.lock
 .env.local
 .env.*.local
 
+# Web Push VAPID keys (contains private key — must never be committed)
+vapid.json
+
 # IDE / Editor
 .vscode/
 .idea/

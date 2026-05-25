@@ -223,7 +223,28 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
         if (!isFormValid() || isLoading) return;
         setIsLoading(true);
 
-        const flattenedData = prepareConfirmationData();
+        // Read the current user from localStorage to attach ownership + audit
+        // fields to every row. c_id / u_id were added to the login response so
+        // a user logged in before that change must logout/login once.
+        let user = null;
+        try {
+            const stored = localStorage.getItem('user');
+            if (stored) user = JSON.parse(stored);
+        } catch (err) {
+            console.error('Failed to parse user from localStorage:', err);
+        }
+        if (!user?.c_id || !user?.u_id) {
+            alert('Session ไม่สมบูรณ์ (ไม่พบ c_id/u_id) กรุณา logout แล้ว login ใหม่');
+            setIsLoading(false);
+            return;
+        }
+
+        const flattenedData = prepareConfirmationData().map(row => ({
+            ...row,
+            c_id:       user.c_id,   // VARCHAR(9) — server derives owner_type from this
+            created_by: user.u_id,   // UNIQUEIDENTIFIER — set on INSERT only
+            updated_by: user.u_id,   // UNIQUEIDENTIFIER — refreshed on every UPDATE
+        }));
 
         try {
             await axios.post('/api/notify', flattenedData);

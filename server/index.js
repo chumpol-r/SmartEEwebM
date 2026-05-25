@@ -66,6 +66,40 @@ function authenticateToken(req, res, next) {
     next();
 }
 
+// --- Helper: resolve the logged-in user's notification scope --------------
+// Returns { cId, isSuperGroup }. cId is the user's polymorphic FK from
+// WebUser (matches WebGroup.c_id OR WebSite.c_id). isSuperGroup is true when
+// the user belongs to a WebGroup with c_active = 'Z' — those users see logs
+// across every org (matches requirePermission's Super Group behaviour).
+//
+// Throws if the user can't be resolved so callers can 403 cleanly.
+async function getUserScope(req) {
+    const userRes = await req.db.request()
+        .input('uid', sql.UniqueIdentifier, req.user.id)
+        .query('SELECT c_id FROM WebUser WHERE u_id = @uid');
+    if (userRes.recordset.length === 0) {
+        const err = new Error('User not found');
+        err.statusCode = 404;
+        throw err;
+    }
+    const cId = String(userRes.recordset[0].c_id || '').trim();
+    if (!cId) {
+        const err = new Error('User has no c_id');
+        err.statusCode = 403;
+        throw err;
+    }
+
+    // Super Group = WebGroup.c_active = 'Z'. Site users can't be Super,
+    // so we only need to check WebGroup here.
+    const grpRes = await req.db.request()
+        .input('id', sql.VarChar, cId)
+        .query("SELECT c_active FROM WebGroup WHERE c_id = @id");
+    const isSuperGroup = grpRes.recordset.length > 0
+        && grpRes.recordset[0].c_active === 'Z';
+
+    return { cId, isSuperGroup };
+}
+
 // --- Middleware for Permission Check ---
 const requirePermission = (menuId) => async (req, res, next) => {
     try {
@@ -3020,13 +3054,18 @@ app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // Find user by email or username
+        // Find user by email or username.
+        // WebUser.c_id is a polymorphic FK that points at either WebGroup or
+        // WebSite (mutually exclusive — a user belongs to one or the other,
+        // never both). COALESCE picks whichever side matched.
         const result = await req.db.request()
             .input('email', sql.VarChar, email)
             .query(`
-                SELECT u.*, g.c_name as group_name 
+                SELECT u.*,
+                       COALESCE(g.c_name, s.c_name) AS group_name
                 FROM WebUser u
                 LEFT JOIN WebGroup g ON u.c_id = g.c_id
+                LEFT JOIN WebSite  s ON u.c_id = s.c_id
                 WHERE u.c_email = @email OR u.c_name = @email
             `);
 
@@ -3066,7 +3105,9 @@ app.post('/api/login', async (req, res) => {
             success: true,
             token,
             user: {
-                id: user.u_id,
+                id: user.u_id,            // kept for backwards-compat with existing client code
+                u_id: user.u_id,          // explicit UNIQUEIDENTIFIER — used for created_by / updated_by
+                c_id: user.c_id,          // VARCHAR(9), polymorphic FK to WebGroup/WebSite — stored as c_id in NotifyConfig/NotifyLog
                 name: user.c_name,
                 email: user.c_email,
                 role: role,
@@ -5197,22 +5238,27 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
         }
 
         // Find an existing subscription for this device/destination.
-        // The dedup key depends on the channel:
-        //   * channels with a destination (webpush/line/sms/email) -> match on destination
-        //   * channels without one (inapp/desktop) -> match on device_id, so each
-        //     browser/device keeps its own row (true multi-device support)
+        // Dedup priority MUST match the UNIQUE index UX_UserNotificationSubscription_Device
+        // on (user_id, channel, device_id) — otherwise re-subscribing the same
+        // device produces a duplicate-key error. For webpush specifically the
+        // browser hands us a fresh `destination` every time you re-subscribe,
+        // so destination is NOT a stable dedup key; device_id is.
+        //
+        // Order:
+        //   1. deviceId present -> match by device_id (covers the UNIQUE index)
+        //   2. destination present (no deviceId) -> match by destination
+        //   3. neither -> one row per (user, channel)
         const findReq = req.db.request()
             .input('userId', sql.UniqueIdentifier, userId)
             .input('channel', sql.VarChar, channel);
         let findWhere = 'user_id = @userId AND channel = @channel';
-        if (destination) {
-            findReq.input('destination', sql.NVarChar, String(destination));
-            findWhere += ' AND destination = @destination';
-        } else if (deviceId) {
+        if (deviceId) {
             findReq.input('deviceId', sql.NVarChar, String(deviceId));
             findWhere += ' AND device_id = @deviceId';
+        } else if (destination) {
+            findReq.input('destination', sql.NVarChar, String(destination));
+            findWhere += ' AND destination = @destination';
         } else {
-            // No destination and no device_id -> fall back to one row per user+channel
             findWhere += ' AND destination IS NULL AND device_id IS NULL';
         }
         const existing = await findReq.query(
@@ -5220,9 +5266,13 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
         );
 
         if (existing.recordset.length > 0) {
+            // Reactivate + refresh ALL fields. destination is critical here:
+            // when a user resubscribes, the browser issues a new push endpoint,
+            // and the old one is dead — we must overwrite it.
             const subscriptionId = existing.recordset[0].subscription_id;
             await req.db.request()
                 .input('subscriptionId', sql.BigInt, subscriptionId)
+                .input('destination', sql.NVarChar, destination ? String(destination) : null)
                 .input('deviceId', sql.NVarChar, deviceId ? String(deviceId) : null)
                 .input('deviceLabel', sql.NVarChar, deviceLabel ? String(deviceLabel) : null)
                 .input('scope', sql.VarChar, String(scope))
@@ -5230,6 +5280,7 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
                 .query(`
                     UPDATE dbo.UserNotificationSubscription
                     SET is_active    = 1,
+                        destination  = @destination,
                         device_id    = @deviceId,
                         device_label = @deviceLabel,
                         scope        = @scope,
@@ -5344,10 +5395,32 @@ app.post('/api/notify', async (req, res) => {
             }
         }
 
+        // Derive owner_type ('GROUP'|'SITE') once per unique c_id seen in
+        // this payload. Polymorphic FK: c_id can point at either WebGroup or
+        // WebSite (mutually exclusive), so we look it up and cache the answer.
+        const ownerTypeCache = new Map();
+        async function resolveOwnerType(cId) {
+            if (!cId) return null;
+            if (ownerTypeCache.has(cId)) return ownerTypeCache.get(cId);
+            const r = await req.db.request()
+                .input('id', sql.VarChar, String(cId))
+                .query('SELECT 1 FROM WebGroup WHERE c_id = @id');
+            const type = r.recordset.length > 0 ? 'GROUP' : 'SITE';
+            ownerTypeCache.set(cId, type);
+            return type;
+        }
+
         for (const item of notifyData) {
-            const { serial, mqttSerial, dbKey, levelName, point, delay, message, alarmType, originalId } = item;
+            const {
+                serial, mqttSerial, dbKey, levelName, point, delay, message, alarmType, originalId,
+                c_id, created_by, updated_by,
+            } = item;
             // Canonical MQTT join key: prefer explicit mqttSerial, else derive from serial.
             const mqttSerialValue = String(mqttSerial || serial || '').toUpperCase() || null;
+            const cId = c_id ? String(c_id) : null;
+            const ownerType = await resolveOwnerType(cId);
+            const createdBy = created_by || null;
+            const updatedBy = updated_by || null;
 
             const checkResult = await req.db.request()
                 .input('serialId', sql.Int, parseInt(originalId))
@@ -5356,7 +5429,8 @@ app.post('/api/notify', async (req, res) => {
                 .query(`SELECT 1 FROM dbo.NotifyConfig WHERE serial_id = @serialId AND dbkey = @dbKey AND level = @level`);
 
             if (checkResult.recordset.length > 0) {
-                // Update existing record
+                // Update existing record — owner_* and created_by are immutable
+                // after insert; we only refresh updated_by + updated_at here.
                 await req.db.request()
                     .input('serialId', sql.Int, parseInt(originalId))
                     .input('serialName', sql.VarChar, String(serial))
@@ -5367,6 +5441,7 @@ app.post('/api/notify', async (req, res) => {
                     .input('delay', sql.Int, parseInt(delay))
                     .input('message', sql.NVarChar, String(message || ''))
                     .input('alarmType', sql.VarChar, String(alarmType || ''))
+                    .input('updatedBy', sql.UniqueIdentifier, updatedBy)
                     .query(`
                         UPDATE dbo.NotifyConfig
                         SET serial_name = @serialName,
@@ -5375,6 +5450,7 @@ app.post('/api/notify', async (req, res) => {
                             delay       = @delay,
                             message     = @message,
                             alarm_type  = @alarmType,
+                            updated_by  = @updatedBy,
                             updated_at  = GETDATE()
                         WHERE serial_id = @serialId AND dbkey = @dbKey AND level = @level
                     `);
@@ -5389,9 +5465,23 @@ app.post('/api/notify', async (req, res) => {
                     .input('delay', sql.Int, parseInt(delay))
                     .input('message', sql.NVarChar, String(message || ''))
                     .input('alarmType', sql.VarChar, String(alarmType || ''))
+                    .input('cId', sql.VarChar, cId)
+                    .input('ownerType', sql.VarChar, ownerType)
+                    .input('createdBy', sql.UniqueIdentifier, createdBy)
+                    .input('updatedBy', sql.UniqueIdentifier, updatedBy)
                     .query(`
-                        INSERT INTO dbo.NotifyConfig (serial_id, serial_name, mqtt_serial, dbkey, level, point, delay, message, alarm_type, created_at, updated_at)
-                        VALUES (@serialId, @serialName, @mqttSerial, @dbKey, @level, @point, @delay, @message, @alarmType, GETDATE(), GETDATE())
+                        INSERT INTO dbo.NotifyConfig (
+                            serial_id, serial_name, mqtt_serial, dbkey, level, point, delay,
+                            message, alarm_type,
+                            c_id, owner_type, created_by, updated_by,
+                            created_at, updated_at
+                        )
+                        VALUES (
+                            @serialId, @serialName, @mqttSerial, @dbKey, @level, @point, @delay,
+                            @message, @alarmType,
+                            @cId, @ownerType, @createdBy, @updatedBy,
+                            GETDATE(), GETDATE()
+                        )
                     `);
             }
         }
@@ -5723,28 +5813,48 @@ app.delete('/api/notify/:id', async (req, res) => {
     }
 });
 
-// Notify Log — read-only list of all NotifyLog rows, newest first
-app.get('/api/notify-log', async (req, res) => {
+// Notify Log — newest first, scoped to the logged-in user's organization.
+// Super Group users (WebGroup.c_active = 'Z') see every row across all orgs;
+// everyone else only sees rows where NotifyLog.c_id matches their own.
+// Legacy rows with c_id IS NULL are hidden from non-Super users.
+app.get('/api/notify-log', authenticateToken, async (req, res) => {
     try {
+        let scope;
+        try {
+            scope = await getUserScope(req);
+        } catch (err) {
+            return res.status(err.statusCode || 500).json({ success: false, error: err.message });
+        }
+
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize) || 50));
         const offset = (page - 1) * pageSize;
 
-        const countRes = await req.db.request()
-            .query(`SELECT COUNT(*) AS total FROM dbo.NotifyLog`);
+        // Single shared WHERE clause so COUNT and SELECT can't drift apart.
+        const whereClause = scope.isSuperGroup ? '' : 'WHERE c_id = @cId';
+
+        const countReq = req.db.request();
+        if (!scope.isSuperGroup) countReq.input('cId', sql.VarChar, scope.cId);
+        const countRes = await countReq.query(
+            `SELECT COUNT(*) AS total FROM dbo.NotifyLog ${whereClause}`
+        );
         const total = countRes.recordset[0].total;
 
-        const result = await req.db.request()
+        const dataReq = req.db.request()
             .input('offset', sql.Int, offset)
-            .input('pageSize', sql.Int, pageSize)
-            .query(`
-                SELECT log_id, notify_id, serial_id, mqtt_serial, gateway_id,
-                       dbkey, level, value, point, message, alarm_type,
-                       event_time, status, sent_at, delivered_count, attempts, created_at
-                FROM dbo.NotifyLog
-                ORDER BY log_id DESC
-                OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
-            `);
+            .input('pageSize', sql.Int, pageSize);
+        if (!scope.isSuperGroup) dataReq.input('cId', sql.VarChar, scope.cId);
+        const result = await dataReq.query(`
+            SELECT log_id, notify_id, serial_id, mqtt_serial, gateway_id,
+                   dbkey, level, value, point, message, alarm_type,
+                   event_time, status, sent_at, delivered_count, attempts, created_at,
+                   event_type, correlation_id,
+                   c_id, owner_type, c_name
+            FROM dbo.NotifyLog
+            ${whereClause}
+            ORDER BY log_id DESC
+            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+        `);
 
         res.json({
             success: true,
@@ -5769,6 +5879,11 @@ app.get('/api/notify-log', async (req, res) => {
                 deliveredCount: r.delivered_count,
                 attempts: r.attempts,
                 createdAt: r.created_at,
+                eventType: r.event_type,
+                correlationId: r.correlation_id != null ? Number(r.correlation_id) : null,
+                cId: r.c_id,
+                ownerType: r.owner_type,
+                cName: r.c_name,
             }))
         });
     } catch (err) {
@@ -5791,29 +5906,75 @@ async function dispatchWebPush() {
     try {
         const pending = await global.dbPool.request().query(`
             SELECT TOP (50) log_id, mqtt_serial, dbkey, level, value, point,
-                   message, alarm_type, event_time
+                   message, alarm_type, event_time, event_type, correlation_id,
+                   c_id, owner_type, c_name
             FROM dbo.NotifyLog
             WHERE status = 'pending'
             ORDER BY log_id ASC
         `);
 
         for (const row of pending.recordset) {
-            // Find active webpush subscriptions that match this serial's scope.
+            // Find active webpush subscriptions that match this serial's scope
+            // AND belong to a user inside the alarm's organization. Super Group
+            // users (WebGroup.c_active = 'Z') receive every alarm. Everyone
+            // else only receives alarms where their WebUser.c_id matches the
+            // alarm's c_id — matching the same scoping rule used by /api/notify-log.
+            //
+            // Legacy rows where row.c_id is NULL only reach Super Group users.
             const subsRes = await global.dbPool.request()
                 .input('serial', sql.VarChar, String(row.mqtt_serial || '').toUpperCase())
+                .input('logCId', sql.VarChar, row.c_id || null)
                 .query(`
-                    SELECT subscription_id, destination
-                    FROM dbo.UserNotificationSubscription
-                    WHERE is_active = 1 AND channel = 'webpush' AND destination IS NOT NULL
-                      AND (scope = 'all' OR (scope = 'serial' AND UPPER(scope_value) = @serial))
+                    SELECT s.subscription_id, s.destination
+                    FROM dbo.UserNotificationSubscription s
+                    INNER JOIN dbo.WebUser u ON u.u_id = s.user_id
+                    LEFT JOIN dbo.WebGroup g ON g.c_id = u.c_id
+                    WHERE s.is_active = 1
+                      AND s.channel = 'webpush'
+                      AND s.destination IS NOT NULL
+                      AND (s.scope = 'all' OR (s.scope = 'serial' AND UPPER(s.scope_value) = @serial))
+                      AND (
+                            -- Super Group: sees everything
+                            g.c_active = 'Z'
+                            -- OR same org (only when log has a c_id to match against)
+                            OR (@logCId IS NOT NULL AND u.c_id = @logCId)
+                          )
                 `);
             const subs = subsRes.recordset;
 
+            // Event-type-aware notification: cleared events get a calmer
+            // "back to normal" presentation so the user can scan at a glance.
+            // The c_name (WebGroup/WebSite display name, snapshotted when
+            // the row was inserted) leads the title so the user can tell at a
+            // glance which org the alert belongs to.
+            const evt = row.event_type || 'raise';
+            const isCleared = evt === 'cleared';
+            const statusTag = isCleared
+                ? 'OK'
+                : (evt === 'escalate' ? 'ESCALATED' : 'ALARM');
+            const orgPrefix = row.c_name ? `${row.c_name} ・ ` : '';
+            const title = `${orgPrefix}${statusTag}: ${row.mqtt_serial} - ${row.dbkey} ${row.level}`;
+            const bodyText = isCleared
+                ? `${row.message || 'Returned to normal'} (current value ${row.value})`
+                : `${row.message || 'Alert'} (value ${row.value}${row.point != null ? `, threshold ${row.point}` : ''})`;
+
             const payload = JSON.stringify({
-                title: `${row.mqtt_serial} • ${row.dbkey} ${row.level}`,
-                body: `${row.message || 'Alert'} (value ${row.value}${row.point != null ? `, threshold ${row.point}` : ''})`,
-                tag: `notify-${row.log_id}`,
-                data: { url: '/notify-log', logId: row.log_id, serial: row.mqtt_serial },
+                title,
+                body: bodyText,
+                // Tag by correlation_id when present so a cleared notification
+                // visually *replaces* the matching raise on supported platforms
+                // (one stacked notification per alarm lifecycle instead of two).
+                tag: `notify-${row.correlation_id || row.log_id}`,
+                data: {
+                    url: '/notify-log',
+                    logId: row.log_id,
+                    serial: row.mqtt_serial,
+                    eventType: evt,
+                    correlationId: row.correlation_id,
+                    cId: row.c_id,
+                    ownerType: row.owner_type,
+                    cName: row.c_name,
+                },
             });
 
             let delivered = 0;
@@ -5866,6 +6027,19 @@ async function dispatchWebPush() {
 if (webpushEnabled) {
     setInterval(dispatchWebPush, WEBPUSH_POLL_MS);
     console.log(`[webpush] dispatcher started (every ${WEBPUSH_POLL_MS}ms)`);
+}
+
+// MQTT Notifier worker — compares incoming MQTT data against NotifyConfig
+// and inserts pending rows into NotifyLog. Defaults ON; set ENABLE_MQTT_WORKER=false
+// to disable (e.g. when running a second instance to avoid duplicate logs).
+if (process.env.ENABLE_MQTT_WORKER !== 'false') {
+    const mqttNotifier = require('./workers/mqttNotifier');
+    // Ensure pool exists before the worker tries to use it.
+    connectToDb()
+        .then(pool => { global.dbPool = pool; return mqttNotifier.start(); })
+        .catch(err => console.error('[mqttNotifier] failed to start:', err));
+} else {
+    console.log('[mqttNotifier] disabled (ENABLE_MQTT_WORKER=false)');
 }
 
 app.listen(PORT, () => {

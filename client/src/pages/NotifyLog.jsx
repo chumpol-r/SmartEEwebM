@@ -19,6 +19,21 @@ const STATUS_COLORS = {
     'failed':  'bg-red-500/20 text-red-400 border-red-500/30',
 };
 
+// Alarm lifecycle event type — raise/escalate are "active" colors, cleared
+// uses cool/positive colors so the user can scan the log at a glance.
+const EVENT_TYPE_COLORS = {
+    'raise':    'bg-red-500/20 text-red-400 border-red-500/30',
+    'escalate': 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    'cleared':  'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+};
+const EVENT_TYPE_LABELS = {
+    'raise':    'Raised',
+    'escalate': 'Escalated',
+    'cleared':  'Cleared',
+};
+
+const EVENT_TYPE_FILTERS = ['all', 'raise', 'escalate', 'cleared'];
+
 function fmt(dt) {
     if (!dt) return '-';
     const match = String(dt).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
@@ -111,6 +126,7 @@ const NotifyLog = () => {
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [fromDate, setFromDate] = useState(todayStartInput);
     const [toDate, setToDate] = useState(todayEndInput);
+    const [eventTypeFilter, setEventTypeFilter] = useState('all');
 
     // Keep pageInput in sync when page changes externally (Prev/Next/First/Last).
     useEffect(() => { setPageInput(String(page)); }, [page]);
@@ -133,8 +149,19 @@ const NotifyLog = () => {
     const fetchPage = useCallback(async (p, showSpinner = true) => {
         if (showSpinner) setLoading(true);
         try {
+            // /api/notify-log scopes results to the logged-in user's c_id
+            // server-side, so we just need to pass the bearer token. A token
+            // missing here means the user is signed out or session expired —
+            // surface that with a clear empty state instead of a silent error.
+            const token = localStorage.getItem('token');
+            if (!token) {
+                setRows([]);
+                setTotal(0);
+                return;
+            }
             const res = await axios.get('/api/notify-log', {
-                params: { page: p, pageSize: PAGE_SIZE }
+                params: { page: p, pageSize: PAGE_SIZE },
+                headers: { Authorization: `Bearer ${token}` },
             });
             if (res.data?.success) {
                 setRows(res.data.data || []);
@@ -142,6 +169,13 @@ const NotifyLog = () => {
             }
         } catch (err) {
             console.error('Error fetching notify log:', err);
+            // 401/403 means the session is bad or the user has no c_id —
+            // wipe stale rows so the UI doesn't show another org's data
+            // from a previous fetch.
+            if (err.response?.status === 401 || err.response?.status === 403) {
+                setRows([]);
+                setTotal(0);
+            }
         } finally {
             if (showSpinner) setLoading(false);
         }
@@ -156,6 +190,7 @@ const NotifyLog = () => {
         setDebouncedSearch('');
         setFromDate(todayStartInput());
         setToDate(todayEndInput());
+        setEventTypeFilter('all');
         fetchPage(page, true);
     };
 
@@ -166,15 +201,17 @@ const NotifyLog = () => {
 
     const handleExportExcel = () => {
         const data = filteredRows.map(r => ({
-            'Serial':     r.mqttSerial || '',
-            'Data':       r.dbkey || '',
-            'Level':      r.level || '',
-            'Value':      r.value ?? '',
-            'Point':      r.point ?? '',
-            'Message':    r.message || '',
-            'Alarm Type': r.alarmType || '',
-            'Status':     r.status || '',
-            'Event Time': r.eventTime ? fmt(r.eventTime) : '',
+            'Serial':         r.mqttSerial || '',
+            'Data':           r.dbkey || '',
+            'Level':          r.level || '',
+            'Event':          EVENT_TYPE_LABELS[r.eventType] || r.eventType || '',
+            'Correlation ID': r.correlationId ?? '',
+            'Value':          r.value ?? '',
+            'Point':          r.point ?? '',
+            'Message':        r.message || '',
+            'Alarm Type':     r.alarmType || '',
+            'Status':         r.status || '',
+            'Event Time':     r.eventTime ? fmt(r.eventTime) : '',
         }));
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
@@ -198,7 +235,9 @@ const NotifyLog = () => {
             const k = toMinuteKey(r.eventTime);
             if (!k || k < fromKey || k > toKey) return false;
         }
-        // 2) text search
+        // 2) event_type filter
+        if (eventTypeFilter !== 'all' && r.eventType !== eventTypeFilter) return false;
+        // 3) text search
         if (search) {
             const hit =
                 (r.mqttSerial || '').toLowerCase().includes(search) ||
@@ -206,7 +245,8 @@ const NotifyLog = () => {
                 (r.level || '').toLowerCase().includes(search) ||
                 (r.message || '').toLowerCase().includes(search) ||
                 (r.alarmType || '').toLowerCase().includes(search) ||
-                (r.status || '').toLowerCase().includes(search);
+                (r.status || '').toLowerCase().includes(search) ||
+                (r.eventType || '').toLowerCase().includes(search);
             if (!hit) return false;
         }
         return true;
@@ -260,7 +300,20 @@ const NotifyLog = () => {
                         />
                     </div>
                     <div className="flex items-center gap-2 text-sm">
-                        <label className="text-slate-400 text-xs">From</label>
+                        <label className="text-slate-400 text-xs">Event</label>
+                        <select
+                            value={eventTypeFilter}
+                            onChange={(e) => setEventTypeFilter(e.target.value)}
+                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                            title="Filter by event type"
+                        >
+                            {EVENT_TYPE_FILTERS.map(t => (
+                                <option key={t} value={t}>
+                                    {t === 'all' ? 'All events' : EVENT_TYPE_LABELS[t]}
+                                </option>
+                            ))}
+                        </select>
+                        <label className="text-slate-400 text-xs ml-2">From</label>
                         <DateTimeField value={fromDate} onChange={setFromDate} />
                         <span className="text-slate-500">→</span>
                         <label className="text-slate-400 text-xs">To</label>
@@ -294,6 +347,7 @@ const NotifyLog = () => {
                                 <th className="px-3 py-3 whitespace-nowrap">Serial</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Data</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Level</th>
+                                <th className="px-3 py-3 whitespace-nowrap">Event</th>
                                 <th className="px-3 py-3 whitespace-nowrap text-right">Value</th>
                                 <th className="px-3 py-3 whitespace-nowrap text-right">Point</th>
                                 <th className="px-3 py-3">Message</th>
@@ -305,14 +359,14 @@ const NotifyLog = () => {
                         <tbody>
                             {loading ? (
                                 <tr>
-                                    <td colSpan="9" className="py-12 text-center text-slate-400">
+                                    <td colSpan="10" className="py-12 text-center text-slate-400">
                                         <RefreshCw size={20} className="animate-spin inline mr-2" />
                                         Loading...
                                     </td>
                                 </tr>
                             ) : filteredRows.length === 0 ? (
                                 <tr>
-                                    <td colSpan="9" className="py-12 text-center text-slate-400">
+                                    <td colSpan="10" className="py-12 text-center text-slate-400">
                                         {search && dateRangeActive && !invalidRange ? (
                                             <>
                                                 <div className="mb-2">
@@ -358,6 +412,14 @@ const NotifyLog = () => {
                                         <td className="px-3 py-2.5 font-semibold text-white">{r.dbkey || '-'}</td>
                                         <td className="px-3 py-2.5">
                                             <Badge value={r.level} colorMap={LEVEL_COLORS} />
+                                        </td>
+                                        <td className="px-3 py-2.5">
+                                            <span
+                                                className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium border ${EVENT_TYPE_COLORS[r.eventType] || 'bg-slate-500/20 text-slate-400 border-slate-500/30'}`}
+                                                title={r.correlationId ? `Linked to log #${r.correlationId}` : 'Original alarm'}
+                                            >
+                                                {EVENT_TYPE_LABELS[r.eventType] || r.eventType || '-'}
+                                            </span>
                                         </td>
                                         <td className="px-3 py-2.5 text-right font-mono text-white">
                                             {r.value != null ? r.value.toLocaleString() : '-'}

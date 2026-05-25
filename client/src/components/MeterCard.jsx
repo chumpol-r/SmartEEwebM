@@ -108,10 +108,10 @@ export function transformMqttToUI(rawData) {
       kvar: { value: (rawData.KVAR || 0).toFixed(2), dbKey: "KVAR" },
       pf: { value: (rawData.PF || 0).toFixed(2), dbKey: "PF" },
       voltage: {
-        r: { value: (rawData.VoltP1 || rawData.VoltL1 || 0).toFixed(2), dbKey: rawData.VoltP1 !== undefined ? "VoltP1" : "VoltL1" },
-        s: { value: (rawData.VoltP2 || rawData.VoltL2 || 0).toFixed(2), dbKey: rawData.VoltP2 !== undefined ? "VoltP2" : "VoltL2" },
-        t: { value: (rawData.VoltP3 || rawData.VoltL3 || 0).toFixed(2), dbKey: rawData.VoltP3 !== undefined ? "VoltP3" : "VoltL3" },
-        avg: { value: (((rawData.VoltP1||rawData.VoltL1||0) + (rawData.VoltP2||rawData.VoltL2||0) + (rawData.VoltP3||rawData.VoltL3||0)) / 3).toFixed(2), dbKey: rawData['VoltP-avr'] !== undefined || rawData.VoltP1 !== undefined ? "VoltP-avr" : "VoltL-avr" }
+        r: { value: (rawData.VoltP1 || 0).toFixed(2), dbKey: "VoltP1" },
+        s: { value: (rawData.VoltP2 || 0).toFixed(2), dbKey: "VoltP2" },
+        t: { value: (rawData.VoltP3 || 0).toFixed(2), dbKey: "VoltP3" },
+        avg: { value: (((rawData.VoltP1||0) + (rawData.VoltP2||0) + (rawData.VoltP3||0)) / 3).toFixed(2), dbKey: "VoltP-avr" }
       },
       current: {
         r: { value: (rawData.Amp1 || 0).toFixed(2), dbKey: "Amp1" },

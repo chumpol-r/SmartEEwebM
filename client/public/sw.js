@@ -12,12 +12,32 @@ self.addEventListener('push', (event) => {
     }
 
     const title = data.title || 'SmartEE — Energy Monitoring';
+
+    // Alarm-lifecycle visual hints: cleared events are silent + non-vibrating
+    // so they don't interrupt the user the same way a raise does.
+    const payload = data.data || {};
+    const evt = payload.eventType || 'raise';
+    const isCleared = evt === 'cleared';
+
+    // Add an owner-type emoji to the body so the user can tell Group vs Site
+    // at a glance even after the long title gets ellipsized by the OS shade.
+    const ownerEmoji = payload.ownerType === 'GROUP' ? '🏢'
+                     : payload.ownerType === 'SITE'  ? '🏭'
+                     : '';
+    const bodyText = ownerEmoji && payload.cName
+        ? `${ownerEmoji} ${payload.cName}\n${data.body || ''}`
+        : (data.body || '');
+
     const options = {
-        body: data.body || '',
+        body: bodyText,
         icon: data.icon || '/icon.svg',
         badge: data.badge || '/icon.svg',
-        tag: data.tag || undefined,      // collapse duplicates by tag (e.g. log id)
-        data: data.data || {},           // carried through to notificationclick
+        tag: data.tag || undefined,          // collapse duplicates by tag
+        renotify: !isCleared,                // re-alert user on raise/escalate
+        silent: isCleared,                   // cleared = no sound
+        requireInteraction: evt === 'raise', // raises stay visible until dismissed
+        vibrate: isCleared ? undefined : [120, 60, 120],
+        data: payload,
     };
 
     event.waitUntil(self.registration.showNotification(title, options));

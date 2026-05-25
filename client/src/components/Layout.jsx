@@ -277,6 +277,7 @@ const Layout = ({ children }) => {
                 setUser(JSON.parse(storedUser));
             }
         };
+        
 
         loadUser();
 
@@ -287,6 +288,8 @@ const Layout = ({ children }) => {
             window.removeEventListener('userUpdated', loadUser);
         };
     }, []);
+
+
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -515,7 +518,7 @@ const Layout = ({ children }) => {
                                 title={isSubscribed ? 'คลิกเพื่อยกเลิกการแจ้งเตือน' : 'สมัครรับการแจ้งเตือน'}
                                 className={cn(
                                     "group relative flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full",
-                                    "overflow-hidden transition-all duration-300 ease-out disabled:opacity-70",
+                                    "overflow-hidden transition-all duration-300 ease-out cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed",
                                     isSubscribed
                                         // Subscribed: green gradient → turns red on hover to signal "cancel"
                                         ? "text-white bg-gradient-to-r from-emerald-500 to-green-500 shadow-lg shadow-emerald-500/30 hover:from-red-500 hover:to-rose-500 hover:shadow-red-500/30 hover:scale-105 active:scale-95 animate-[sub-pop_0.4s_ease-out]"
