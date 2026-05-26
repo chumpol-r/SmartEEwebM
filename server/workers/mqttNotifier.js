@@ -62,21 +62,39 @@ let started = false;
 // }
 
 // ---- Helpers -------------------------------------------------------------
+// MQTT config priority:
+//   1. server/.env (MQTT_* vars) — production / staging
+//   2. client/public/config/app-config.json — legacy dev convenience
+//
+// Reading env first means production deployments don't have to ship a copy
+// of app-config.json with credentials. The JSON file remains a fallback so
+// existing dev setups keep working without any setup change.
 function loadMqttConfig() {
-    const configPath = path.resolve(__dirname, '../../client/public/config/app-config.json');
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const mqttCfg = raw.mqtt || {};
-    const url = mqttCfg.mode === 'onsite' ? mqttCfg.onsiteUrl : mqttCfg.cloudUrl;
+    let jsonCfg = {};
+    try {
+        const configPath = path.resolve(__dirname, '../../client/public/config/app-config.json');
+        jsonCfg = JSON.parse(fs.readFileSync(configPath, 'utf-8')).mqtt || {};
+    } catch (_) { /* file missing or unreadable is fine — env can cover it */ }
+
+    const jsonOpts = jsonCfg.options || {};
+    const mode      = process.env.MQTT_MODE       || jsonCfg.mode       || 'cloud';
+    const cloudUrl  = process.env.MQTT_CLOUD_URL  || jsonCfg.cloudUrl   || 'wss://cloudtat.com:9001/mqtt';
+    const onsiteUrl = process.env.MQTT_ONSITE_URL || jsonCfg.onsiteUrl  || 'ws://localhost:9001/mqtt';
+    const url = mode === 'onsite' ? onsiteUrl : cloudUrl;
+
     return {
         url,
         options: {
-            keepalive: mqttCfg.options?.keepalive ?? 30,
+            keepalive: parseInt(process.env.MQTT_KEEPALIVE || jsonOpts.keepalive || '30', 10),
+            // Stable clientId across restarts so the broker queues msgs while
+            // we're down. Suffix with hostname to avoid colliding with another
+            // worker on the same broker.
             clientId: `smartee-notifier-${require('os').hostname()}`,
-            username: mqttCfg.options?.username,
-            password: mqttCfg.options?.password,
-            clean: false,
-            reconnectPeriod: mqttCfg.options?.reconnectPeriod ?? 1000,
-            connectTimeout: mqttCfg.options?.connectTimeout ?? 30_000,
+            username: process.env.MQTT_USERNAME || jsonOpts.username,
+            password: process.env.MQTT_PASSWORD || jsonOpts.password,
+            clean: false,             // persistent session
+            reconnectPeriod: parseInt(process.env.MQTT_RECONNECT_MS || jsonOpts.reconnectPeriod || '1000', 10),
+            connectTimeout: parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || jsonOpts.connectTimeout || '30000', 10),
             protocolVersion: 4,
             rejectUnauthorized: false,
         },

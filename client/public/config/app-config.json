@@ -8,8 +8,6 @@
     "onsiteUrl": "ws://localhost:9001/mqtt",
     "options": {
       "keepalive": 30,
-      "username": "tatcloudweb",
-      "password": "nbpjfdt9",
       "reconnectPeriod": 1000,
       "connectTimeout": 30000
     }

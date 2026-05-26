@@ -5197,6 +5197,30 @@ app.get('/api/webpush/public-key', (req, res) => {
     res.json({ success: true, publicKey: VAPID_PUBLIC_KEY });
 });
 
+// MQTT client config — broker URL is public-ish (anyone running the app would
+// learn it from network traffic), but the username/password are credentials
+// that should never sit in a static JSON file. Requiring a valid auth token
+// here means an unauthenticated visitor can't lift the broker login from
+// /config/app-config.json and use it to spoof MQTT publishes.
+//
+// All fields fall back to the legacy defaults so deployments that haven't
+// switched to env yet keep working.
+app.get('/api/mqtt/config', authenticateToken, (req, res) => {
+    res.json({
+        success: true,
+        mode:        process.env.MQTT_MODE || 'cloud',
+        cloudUrl:    process.env.MQTT_CLOUD_URL  || 'wss://cloudtat.com:9001/mqtt',
+        onsiteUrl:   process.env.MQTT_ONSITE_URL || 'ws://localhost:9001/mqtt',
+        options: {
+            keepalive:        parseInt(process.env.MQTT_KEEPALIVE || '30', 10),
+            username:         process.env.MQTT_USERNAME || 'tatcloudweb',
+            password:         process.env.MQTT_PASSWORD || 'nbpjfdt9',
+            reconnectPeriod:  parseInt(process.env.MQTT_RECONNECT_MS || '1000', 10),
+            connectTimeout:   parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || '30000', 10),
+        },
+    });
+});
+
 app.get('/api/subscription', authenticateToken, async (req, res) => {
     try {
         const result = await req.db.request()
