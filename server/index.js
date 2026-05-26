@@ -12,11 +12,22 @@ const PORT = process.env.PORT || 3002;
 // Keys come from .env (dev) or host environment variables (production).
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+// VAPID subject MUST be either `mailto:foo@bar` or `https://example.com` —
+// Apple's APNs (Safari/iOS) rejects bare emails with HTTP 403, while FCM
+// (Chrome/Android) silently accepts them. Auto-prefix to keep iOS happy
+// even when the env var was set without the scheme.
+function normalizeVapidSubject(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return 'mailto:admin@example.com';
+    if (s.startsWith('mailto:') || s.startsWith('https://')) return s;
+    if (s.includes('@')) return `mailto:${s}`;
+    return `https://${s}`;
+}
+const VAPID_SUBJECT = normalizeVapidSubject(process.env.VAPID_SUBJECT);
 const webpushEnabled = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
 if (webpushEnabled) {
     webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-    console.log('[webpush] VAPID configured');
+    console.log(`[webpush] VAPID configured (subject=${VAPID_SUBJECT})`);
 } else {
     console.warn('[webpush] VAPID keys missing — web push disabled (set VAPID_* in .env)');
 }
@@ -5898,7 +5909,23 @@ app.get('/api/notify-log', authenticateToken, async (req, res) => {
 // one NotifyLog row is delivered exactly once to the subscribers active at
 // that moment (a device that subscribes later won't receive old alerts).
 const WEBPUSH_POLL_MS = 3000;
+// Hard cap on each web push attempt — without this a stale endpoint can hang
+// the await indefinitely (FCM/APNs sometimes accept a TCP connection but
+// never respond) and freeze the entire dispatcher. 10s is well past every
+// healthy response; anything slower is effectively dead.
+const WEBPUSH_TIMEOUT_MS = 10000;
 let webpushDispatchRunning = false;
+
+function sendNotificationWithTimeout(subscription, payload, ms) {
+    return Promise.race([
+        webpush.sendNotification(subscription, payload),
+        new Promise((_, reject) => setTimeout(() => {
+            const err = new Error('webpush send timeout');
+            err.code = 'ETIMEDOUT';
+            reject(err);
+        }, ms)),
+    ]);
+}
 
 async function dispatchWebPush() {
     if (!webpushEnabled || webpushDispatchRunning || !global.dbPool) return;
@@ -5977,31 +6004,45 @@ async function dispatchWebPush() {
                 },
             });
 
-            let delivered = 0;
-            for (const s of subs) {
+            // Send to every matching subscription in parallel. Each send is
+            // wrapped in a timeout so one slow/dead endpoint can't stall the
+            // others, and Promise.allSettled means a single rejection won't
+            // skip the rest. This is the critical change that prevents the
+            // dispatcher from hanging on the first stale FCM endpoint.
+            const sendResults = await Promise.allSettled(subs.map(async (s) => {
                 let subscription;
                 try {
                     subscription = JSON.parse(s.destination);
                 } catch (_) {
-                    continue; // corrupt destination — skip
+                    return { delivered: false };
                 }
                 try {
-                    await webpush.sendNotification(subscription, payload);
-                    delivered++;
+                    await sendNotificationWithTimeout(subscription, payload, WEBPUSH_TIMEOUT_MS);
+                    return { delivered: true };
                 } catch (err) {
-                    // 404/410 mean the endpoint is dead — deactivate so we stop retrying.
-                    if (err.statusCode === 404 || err.statusCode === 410) {
-                        await global.dbPool.request()
-                            .input('id', sql.BigInt, s.subscription_id)
-                            .query(`UPDATE dbo.UserNotificationSubscription
-                                    SET is_active = 0, updated_at = GETDATE()
-                                    WHERE subscription_id = @id`);
-                        console.log(`[webpush] deactivated dead subscription ${s.subscription_id} (HTTP ${err.statusCode})`);
+                    const isDead = err.statusCode === 404
+                        || err.statusCode === 410
+                        || err.code === 'ETIMEDOUT';
+                    if (isDead) {
+                        try {
+                            await global.dbPool.request()
+                                .input('id', sql.BigInt, s.subscription_id)
+                                .query(`UPDATE dbo.UserNotificationSubscription
+                                        SET is_active = 0, updated_at = GETDATE()
+                                        WHERE subscription_id = @id`);
+                        } catch (_) { /* swallow — best effort */ }
+                        const reason = err.code === 'ETIMEDOUT' ? 'timeout' : `HTTP ${err.statusCode}`;
+                        console.log(`[webpush] deactivated dead subscription ${s.subscription_id} (${reason})`);
                     } else {
                         console.error(`[webpush] send failed (sub ${s.subscription_id}):`, err.statusCode || err.message);
                     }
+                    return { delivered: false };
                 }
-            }
+            }));
+            const delivered = sendResults.reduce(
+                (n, r) => n + (r.status === 'fulfilled' && r.value.delivered ? 1 : 0),
+                0
+            );
 
             // matched>0 but none delivered -> 'failed'; otherwise 'sent'.
             const newStatus = (subs.length > 0 && delivered === 0) ? 'failed' : 'sent';

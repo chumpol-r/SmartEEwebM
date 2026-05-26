@@ -28,11 +28,16 @@ self.addEventListener('push', (event) => {
         ? `${ownerEmoji} ${payload.cName}\n${data.body || ''}`
         : (data.body || '');
 
+    // A tag is mandatory when renotify is true (browsers throw otherwise).
+    // The dispatcher always sets one, but DevTools test pushes and any other
+    // ad-hoc push won't — so always fall back to a non-empty value.
+    const tag = data.tag || 'smartee-notification';
+
     const options = {
         body: bodyText,
         icon: data.icon || '/icon.svg',
         badge: data.badge || '/icon.svg',
-        tag: data.tag || undefined,          // collapse duplicates by tag
+        tag,                                 // collapse duplicates by tag
         renotify: !isCleared,                // re-alert user on raise/escalate
         silent: isCleared,                   // cleared = no sound
         requireInteraction: evt === 'raise', // raises stay visible until dismissed
