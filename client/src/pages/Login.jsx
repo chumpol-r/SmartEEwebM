@@ -21,10 +21,6 @@ const Login = () => {
                 localStorage.setItem('token', res.data.token);
                 localStorage.setItem('user', JSON.stringify(res.data.user));
 
-                // Notify the rest of the app that auth state changed so any
-                // listener (Layout, ConfigContext, etc.) can refresh data that
-                // depends on the user being signed in — e.g. fetching MQTT
-                // credentials from the now-authenticated /api/mqtt/config.
                 window.dispatchEvent(new Event('userUpdated'));
 
                 // Check for returnUrl (e.g., from QR scan page)

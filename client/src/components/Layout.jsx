@@ -178,8 +178,20 @@ const Layout = ({ children }) => {
         if (subscribing) return;
 
         // Web Push needs a service worker + Push API (and a secure context: https or localhost).
-        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-            alert('เบราว์เซอร์นี้ไม่รองรับ Web Push');
+        // In-app browsers (LINE, Facebook, Instagram) commonly strip these
+        // APIs even on otherwise-capable Android Chrome, so we surface which
+        // capability is missing to make that obvious rather than just saying
+        // "not supported".
+        const missing = [];
+        if (!('serviceWorker' in navigator)) missing.push('Service Worker');
+        if (!('PushManager' in window))      missing.push('Push API');
+        if (typeof Notification === 'undefined') missing.push('Notification API');
+        if (missing.length) {
+            alert(
+                'เบราว์เซอร์นี้ไม่รองรับ Web Push (ขาด: ' + missing.join(', ') + ')\n\n' +
+                'หากเปิดจาก LINE / Facebook / Instagram กรุณากดเมนู ⋮ มุมขวาบน → ' +
+                '"เปิดใน Chrome" แล้วลองใหม่อีกครั้ง'
+            );
             return;
         }
 
