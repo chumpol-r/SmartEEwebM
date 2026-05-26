@@ -5931,13 +5931,24 @@ async function dispatchWebPush() {
     if (!webpushEnabled || webpushDispatchRunning || !global.dbPool) return;
     webpushDispatchRunning = true;
     try {
+        // Prefer the LIVE NotifyConfig.message when available so admins can
+        // edit copy and have it reflected on the next push, even for events
+        // already queued. Fall back to NotifyLog.message (snapshot taken at
+        // fire time) when:
+        //   * the originating NotifyConfig row was deleted
+        //   * nc.message is NULL or empty string
+        //   * the NotifyLog row wasn't tied to a config (notify_id IS NULL)
+        // NULLIF() trims empty strings so COALESCE skips them.
         const pending = await global.dbPool.request().query(`
-            SELECT TOP (50) log_id, mqtt_serial, dbkey, level, value, point,
-                   message, alarm_type, event_time, event_type, correlation_id,
-                   c_id, owner_type, c_name
-            FROM dbo.NotifyLog
-            WHERE status = 'pending'
-            ORDER BY log_id ASC
+            SELECT TOP (50)
+                nl.log_id, nl.mqtt_serial, nl.dbkey, nl.level, nl.value, nl.point,
+                COALESCE(NULLIF(nc.message, ''), nl.message) AS message,
+                nl.alarm_type, nl.event_time, nl.event_type, nl.correlation_id,
+                nl.c_id, nl.owner_type, nl.c_name
+            FROM dbo.NotifyLog nl
+            LEFT JOIN dbo.NotifyConfig nc ON nc.notify_id = nl.notify_id
+            WHERE nl.status = 'pending'
+            ORDER BY nl.log_id ASC
         `);
 
         for (const row of pending.recordset) {
