@@ -124,8 +124,6 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
                     const levelSettings = notificationSettings[settingKey]?.[levelIndex] || {};
                     const base = {
                         serial: metric.serial,
-                        // Canonical MQTT join key = the exact topic serial (uppercased),
-                        // so the alert worker can match payloads precisely.
                         mqttSerial: String(metric.serial || '').toUpperCase(),
                         dbKey: metric.dbKey,
                         levelName: levelName,
@@ -134,8 +132,10 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
                         originalId: parseInt(metric.meterId)
                     };
                     if (levelName === 'Normal') {
-                        // Normal: Point/Delay fixed (0 / 10). Only submit when an Alarm is chosen.
-                        if (!levelSettings.alarmType) return null;
+                        // Normal: point=0, delay=10 fixed.
+                        // Always saved — backend needs this row to:
+                        //   1. use Normal.delay as the clear-debounce timer
+                        //   2. use Normal.message / alarmType for the 'cleared' push notification
                         return { ...base, point: 0, delay: 10 };
                     }
                     return {
@@ -143,9 +143,7 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
                         point: Number(levelSettings.point) || 0,
                         delay: Number(levelSettings.delay) || 10
                     };
-                })
-                // Non-Normal needs point > 0; Normal is always kept (it passed the alarm check above)
-                .filter(setting => setting && (setting.levelName === 'Normal' || setting.point > 0));
+                });
         });
     };
 

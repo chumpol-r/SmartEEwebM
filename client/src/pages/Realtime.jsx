@@ -306,7 +306,7 @@ const Realtime = () => {
                         <Autocomplete
                             items={meters}
                             selected={selectedMeters}
-                            onChange={setSelectedMeters}
+                            onChange={(vals) => setSelectedMeters([...new Set(vals)])}
                             placeholder="Search machines..."
                         />
                     </div>

@@ -268,18 +268,23 @@ async function evaluate(pool, serial, dbkey, value, configs, eventTime, now) {
             prev.normalSince = now;  // start clear-debounce timer
         }
 
-        // Use the original raise-level config for clear delay (so the rule
-        // matches the alarm that's being cleared). Fall back to peakLevel
-        // delay if the original isn't present anymore.
-        const clearCfg = configForLevel(configs, prev.peakLevel);
+        // Normal config drives the clear delay and cleared notification attributes.
+        // Fall back to peakLevel config for legacy rows that predate the Normal save fix.
+        const normalCfg    = configs.find(c => c.level === 'Normal');
+        const clearCfg     = normalCfg || configForLevel(configs, prev.peakLevel);
         const clearDelayMs = (clearCfg?.delay || 0) * 1000;
 
         if (now - prev.normalSince >= clearDelayMs) {
             // Emit cleared and forget this alarm.
+            // level field keeps the peak for context; message/alarmType from Normal config.
             await insertNotifyLog(pool, {
                 serial, dbkey,
                 value,
-                cfg: { ...clearCfg, level: prev.peakLevel, message: `Cleared (was ${prev.peakLevel})` },
+                cfg: {
+                    ...clearCfg,
+                    level:   prev.peakLevel,
+                    message: clearCfg?.message || `Cleared (was ${prev.peakLevel})`,
+                },
                 eventTime,
                 eventType: 'cleared',
                 correlationId: prev.raiseLogId,
@@ -414,7 +419,10 @@ async function sweepStaleAlarms(pool) {
     for (const [k, s] of stale) {
         const [serial, dbkey] = k.split('|');
         const configs = configByKey.get(k) || [];
-        const cfg = configForLevel(configs, s.peakLevel) || { notifyId: null, serialId: null, point: null, alarmType: '' };
+        const normalCfg = configs.find(c => c.level === 'Normal');
+        const cfg = normalCfg
+            || configForLevel(configs, s.peakLevel)
+            || { notifyId: null, serialId: null, point: null, alarmType: '' };
         await insertNotifyLog(pool, {
             serial, dbkey,
             value: 0,
