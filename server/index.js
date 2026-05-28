@@ -7,6 +7,10 @@ const { generateId } = require('./utils/idGenerator');
 
 const app = express();
 const PORT = process.env.PORT || 3002;
+const EXTRA_PORTS = (process.env.EXTRA_PORTS || '3003')
+    .split(',')
+    .map(s => parseInt(s.trim(), 10))
+    .filter(p => Number.isInteger(p) && p > 0 && p !== Number(PORT));
 
 // ===== Web Push (VAPID) setup =====
 // Keys come from .env (dev) or host environment variables (production).
@@ -34,6 +38,17 @@ if (webpushEnabled) {
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// Health check endpoint (no auth required)
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        environment: process.env.NODE_ENV || 'development',
+        port: PORT
+    });
+});
 
 // Middleware to ensure DB connection
 app.use(async (req, res, next) => {
@@ -1667,7 +1682,6 @@ app.get('/api/menus/exported-views', authenticateToken, async (req, res) => {
 app.get('/api/user/permissions', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
-
         // 1. Get User Info & specific C_ID (Group/Site)
         const userRes = await req.db.request()
             .input('u_id', sql.UniqueIdentifier, userId)
@@ -1708,6 +1722,7 @@ app.get('/api/user/permissions', authenticateToken, async (req, res) => {
         try {
             decryptedRole = Decrypt(role);
             if (decryptedRole.startsWith(email)) decryptedRole = decryptedRole.substring(email.length);
+
         } catch (e) { }
 
         // Check if effectiveGroupId is a Super Group (c_active = 'Z')
@@ -5959,6 +5974,50 @@ if (process.env.ENABLE_MQTT_WORKER === 'true') {
     console.log('[workers] in-process workers disabled — run `node worker.js` in a separate process to deliver notifications');
 }
 
-app.listen(PORT, () => {
+// Sync BaseURL from SystemSettings table → client/dist/config/app-config.json.
+// Runs once at startup in production so the SPA picks the DB-managed URL
+// (used for absolute links like QR codes) without needing a separate API call.
+// In dev we leave the JSON untouched so the committed empty value (relative
+// URLs via Vite proxy) stays in place.
+async function syncAppConfigFromDB() {
+    if (process.env.NODE_ENV !== 'production') {
+        console.log('[config-sync] skipped (NODE_ENV != production)');
+        return;
+    }
+    const fs = require('fs');
+    const path = require('path');
+    const configPath = path.join(__dirname, '..', 'client', 'dist', 'config', 'app-config.json');
+    try {
+        const pool = global.dbPool || (global.dbPool = await connectToDb());
+        const result = await pool.request()
+            .query("SELECT SettingValue FROM SystemSettings WHERE SettingKey = 'BaseURL'");
+        if (result.recordset.length === 0) {
+            console.warn('[config-sync] SystemSettings.BaseURL not found — skipping');
+            return;
+        }
+        const baseUrl = String(result.recordset[0].SettingValue || '').trim();
+        if (!fs.existsSync(configPath)) {
+            console.warn(`[config-sync] config file not found at ${configPath} — skipping`);
+            return;
+        }
+        const current = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        current.system = { ...(current.system || {}), baseUrl };
+        fs.writeFileSync(configPath, JSON.stringify(current, null, 2) + '\n', 'utf8');
+        console.log(`[config-sync] system.baseUrl set to "${baseUrl}"`);
+    } catch (err) {
+        console.error('[config-sync] failed:', err.message);
+    }
+}
+
+app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
+    await syncAppConfigFromDB();
 });
+
+for (const extraPort of EXTRA_PORTS) {
+    app.listen(extraPort, () => {
+        console.log(`Server also listening on port ${extraPort}`);
+    }).on('error', err => {
+        console.error(`Failed to bind extra port ${extraPort}:`, err.message);
+    });
+}

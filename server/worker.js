@@ -15,7 +15,7 @@
 //       nssm install SmartEEWorker "C:\Program Files\nodejs\node.exe" "C:\Workspaces\SmartEEweb\server\worker.js"
 //       nssm set    SmartEEWorker AppDirectory "C:\Workspaces\SmartEEweb\server"
 //       nssm start  SmartEEWorker
-//   * On Linux / Docker, use PM2 / systemd to keep this process alive.
+//   * On Linux, use PM2 / systemd to keep this process alive.
 //
 // In single-process / legacy setups, set ENABLE_MQTT_WORKER=true in the API's
 // .env and DON'T start this file — index.js will boot both pieces itself.

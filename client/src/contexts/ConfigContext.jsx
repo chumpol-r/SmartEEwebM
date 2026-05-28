@@ -10,6 +10,9 @@ const DEFAULT_CONFIG = {
     api: {
         baseUrl: ''  // Empty = use relative URLs (same origin)
     },
+    system: {
+        baseUrl: ''  // Absolute site URL (QR codes, share links). Empty = fall back to window.location.origin at call site.
+    },
     mqtt: {
         mode: 'cloud',
         cloudUrl: 'wss://cloudtat.com:9001/mqtt',
@@ -45,7 +48,8 @@ export const ConfigProvider = ({ children }) => {
             return {
                 ...DEFAULT_CONFIG,
                 ...loaded,
-                api:  { ...DEFAULT_CONFIG.api,  ...(loaded.api  || {}) },
+                api:    { ...DEFAULT_CONFIG.api,    ...(loaded.api    || {}) },
+                system: { ...DEFAULT_CONFIG.system, ...(loaded.system || {}) },
                 mqtt: {
                     ...DEFAULT_CONFIG.mqtt,
                     ...(loaded.mqtt || {}),
@@ -153,6 +157,7 @@ export const ConfigProvider = ({ children }) => {
         error,
         refresh,
         apiBaseUrl: config.api.baseUrl || '',
+        systemBaseUrl: config.system?.baseUrl || (typeof window !== 'undefined' ? window.location.origin : ''),
         mqttUrl: getMqttUrl(),
         mqttOptions: getMqttOptions(),
         isCloudMode: config.mqtt.mode === 'cloud',

@@ -10,7 +10,7 @@ const sql = require('mssql/msnodesqlv8');
 require('dotenv').config();
 
 const DB_SERVER  = process.env.DB_SERVER  || 'INNOTUC01\\SQLEXPRESS';
-const DB_NAME    = process.env.DB_NAME    || 'db_energy_oee';
+const DB_NAME    = process.env.DB_NAME    || 'db_energy_oee_dev';
 const DB_USER    = process.env.DB_USER    || '';
 const DB_PASS    = process.env.DB_PASS    || '';
 // Default to trusted (Windows Auth) when no explicit choice was made AND no
@@ -35,13 +35,20 @@ parts.push('Encrypt=Yes', 'TrustServerCertificate=Yes');
 const config = { connectionString: parts.join(';') + ';' };
 
 async function connectToDb() {
+    const authMode = DB_TRUSTED ? 'WindowsAuth' : `SQLAuth (${DB_USER})`;
+    const displayConnStr = config.connectionString.replace(/PWD=[^;]+/, 'PWD=***');
+    console.log(`[db] Connecting → ${DB_SERVER}/${DB_NAME} (${authMode})`);
+    console.log(`[db] Connection string: ${displayConnStr}`);
     try {
         const pool = await sql.connect(config);
-        const authMode = DB_TRUSTED ? 'WindowsAuth' : `SQLAuth (${DB_USER})`;
         console.log(`Connected to SQL Server (${DB_SERVER}/${DB_NAME}, ${authMode})`);
         return pool;
     } catch (err) {
-        console.error('Database connection failed:', err);
+        const detail = err.originalError
+            ? JSON.stringify(err.originalError)
+            : (err.message || JSON.stringify(err));
+        console.error(`[db] Connection failed: ${detail}`);
+        console.error(`[db] Full error:`, JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
         throw err;
     }
 }

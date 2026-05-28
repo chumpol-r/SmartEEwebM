@@ -2,6 +2,9 @@
   "api": {
     "baseUrl": ""
   },
+  "system": {
+    "baseUrl": ""
+  },
   "mqtt": {
     "mode": "cloud",
     "cloudUrl": "wss://cloudtat.com:9001/mqtt",

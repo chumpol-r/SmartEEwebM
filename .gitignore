@@ -1,6 +1,74 @@
-server/db.js
-server/db.js
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+server/.env
+client/.env
+
+# Build outputs
+dist/
+build/
+client/dist/
+server/dist/
+
+# Logs
+logs/
+*.log
+server/logs/
+pm2-*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Claude AI
 .claude/settings.local.json
-client/public/config/app-config.json
+
+# Backups
+*.bak
+*.backup
+backups/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database
+*.mdf
+*.ldf
+*.db
+
+# Sensitive configs (keep examples)
+server/db.js
 client/public/config/app-config.json
 client/vite.config.js
+
+# Per-host IIS / iisnode config — production server keeps its own copy,
+# do not overwrite on git pull. File is kept locally for reference only.
+server/web.config
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing
+coverage/
+.nyc_output/
+
+# Production
+*.tar.gz
+*.zip

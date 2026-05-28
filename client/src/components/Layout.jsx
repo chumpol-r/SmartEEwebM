@@ -76,7 +76,9 @@ const Layout = ({ children }) => {
         '/smartboard': 39,
         '/carbon-credit': 40,
         '/custom-view': 41,
-        '/member': 32
+        '/member': 32,
+        '/notify-config': 98,
+        '/notify-log': 99,
     };
 
     useEffect(() => {
@@ -128,8 +130,8 @@ const Layout = ({ children }) => {
         { path: '/smartboard', label: 'Smartboard', icon: Monitor },
         { path: '/custom-view', label: 'Custom View', icon: PencilRuler },
         { path: '/setting', label: 'Setting', icon: Settings },
-        { path: '/notify-config', label: 'Notify Config', icon: Bell, alwaysShow: true },
-        { path: '/notify-log', label: 'Notify Log', icon: ClipboardList, alwaysShow: true },
+        { path: '/notify-config', label: 'Notify Config', icon: Bell },
+        { path: '/notify-log', label: 'Notify Log', icon: ClipboardList },
     ];
 
     const [user, setUser] = useState(null);

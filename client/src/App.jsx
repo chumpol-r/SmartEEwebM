@@ -40,6 +40,8 @@ const MENU_IDS = {
     '/smartboard': 39,
     '/carbon-credit': 40,
     '/custom-view': 41,
+    '/notify-config': 98,
+    '/notify-log': 99,
 };
 
 // Protected Route Wrapper
@@ -72,7 +74,9 @@ const ProtectedRoute = ({ children }) => {
                 const response = await axios.get('/api/user/permissions', {
                     headers: { Authorization: `Bearer ${token}` }
                 });
+                console.log(response.data, 'Permissions API response');
                 const allowedMenus = response.data;
+
 
                 console.log('=== Permission Debug ===');
                 console.log('Path:', location.pathname);

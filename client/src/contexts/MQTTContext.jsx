@@ -18,7 +18,7 @@ export const MQTTProvider = ({ children }) => {
     const [data, setData] = useState({}); // Map of serial -> latest data
     const clientRef = useRef(null);
     const subscriptionsRef = useRef(new Set()); // Track active subscriptions
-    const initializedRef = useRef(false); // Prevent double init in StrictMode
+    const lastConnectionKeyRef = useRef(''); // Track URL+creds to avoid redundant reconnects
 
     useEffect(() => {
         // Wait for config to load
@@ -27,14 +27,31 @@ export const MQTTProvider = ({ children }) => {
             return;
         }
 
-        // Prevent double initialization in StrictMode
-        if (initializedRef.current) {
-            console.log("MQTTProvider: Already initialized, skipping...");
+        // Skip when credentials haven't been loaded yet (visitor not logged in).
+        // Connecting now would just be rejected with "Not authorized".
+        const username = mqttOptions?.username || '';
+        const password = mqttOptions?.password || '';
+        if (!username) {
+            console.log("MQTTProvider: Waiting for credentials (login required)...");
             return;
         }
-        initializedRef.current = true;
 
-        // Connect to MQTT once
+        // mqttOptions is a fresh object every render (random clientId), so we
+        // key on the values that actually matter to avoid an infinite reconnect.
+        const connectionKey = `${mqttUrl}|${username}|${password}`;
+        if (connectionKey === lastConnectionKeyRef.current && clientRef.current) {
+            return; // same target/creds — keep the existing connection
+        }
+        lastConnectionKeyRef.current = connectionKey;
+
+        // Close any previous client (e.g. reconnecting after login)
+        if (clientRef.current) {
+            console.log("MQTTProvider: Closing previous client before reconnect");
+            try { clientRef.current.end(true); } catch (e) { /* ignore */ }
+            clientRef.current = null;
+        }
+
+        // Connect to MQTT with the now-available credentials
         console.log("MQTTProvider: Connecting to MQTT at:", mqttUrl);
         const client = mqtt.connect(mqttUrl, mqttOptions);
         clientRef.current = client;
