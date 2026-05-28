@@ -161,6 +161,10 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
     const [chatVisible, setChatVisible] = useState(false);
     const [tokenCopied, setTokenCopied] = useState(false);
     const [chatCopied, setChatCopied] = useState(false);
+    // Submission error (e.g. invalid token, bot not in group, LINE API down)
+    const [submitError, setSubmitError] = useState(null);
+    // On success the backend returns bot/chat identity — we flash it briefly.
+    const [submitSummary, setSubmitSummary] = useState(null);
 
     // Reset state on open
     useEffect(() => {
@@ -168,6 +172,8 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
             setSubmitting(false);
             setDone(false);
             setSelected('free');
+            setSubmitError(null);
+            setSubmitSummary(null);
         } else {
             // Security: auto-hide secrets when modal closes
             setTokenVisible(false);
@@ -209,6 +215,7 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
     const handleSubmit = async () => {
         if (submitDisabled) return;
         setSubmitting(true);
+        setSubmitError(null);
         try {
             const payload =
                 selected === 'line'
@@ -216,11 +223,15 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                     : selected === 'free'
                         ? { tier: 'free', action: webPushSubscribed ? 'unsubscribe' : 'subscribe' }
                         : { tier: selected };
-            await onSubmit?.(payload);
+            const result = await onSubmit?.(payload);
+            // Backend returns { line: { bot, chat } } on success — show it briefly
+            if (result?.line) setSubmitSummary(result.line);
             setDone(true);
-            setTimeout(() => { onClose?.(); }, 1100);
+            // Give the user a touch longer when there's a summary to read
+            setTimeout(() => { onClose?.(); }, result?.line ? 1800 : 1100);
         } catch (err) {
             console.error('Subscription submit failed:', err);
+            setSubmitError(err?.message || 'การเชื่อมต่อล้มเหลว');
             setSubmitting(false);
         }
     };
@@ -482,6 +493,31 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                                         We mask sensitive values by default. Toggle visibility only when verifying — for security, your inputs auto-hide when you leave this dialog.
                                     </p>
                                 </div>
+
+                                {/* Submission error (token invalid, bot not in group, etc.) */}
+                                {submitError && (
+                                    <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/10 border border-rose-500/40">
+                                        <X size={14} className="text-rose-300 mt-0.5 shrink-0" />
+                                        <div className="text-xs text-rose-200 whitespace-pre-line">
+                                            {submitError}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Success summary — backend confirmed bot + group reachable */}
+                                {submitSummary && (
+                                    <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/40">
+                                        <CheckCircle2 size={16} className="text-emerald-300 mt-0.5 shrink-0" />
+                                        <div className="text-xs text-emerald-100 space-y-0.5">
+                                            <div>เชื่อมต่อสำเร็จ — ส่งข้อความทดสอบไปยัง LINE แล้ว</div>
+                                            <div className="text-emerald-200/80">
+                                                Bot: <span className="font-medium text-white">{submitSummary.bot?.displayName || submitSummary.bot?.basicId || 'Unknown'}</span>
+                                                <span className="mx-1">→</span>
+                                                {submitSummary.chat?.type === 'group' ? 'Group' : submitSummary.chat?.type === 'room' ? 'Room' : 'User'}: <span className="font-medium text-white">{submitSummary.chat?.displayName || '—'}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

@@ -293,26 +293,42 @@ const Layout = ({ children }) => {
         return isSubscribed ? handleUnsubscribe() : handleSubscribe();
     };
 
-    // Persist a LINE Bot subscription. Backend POST /api/subscription accepts a
-    // free-form `destination` per channel — we serialize { token, chatId } as JSON.
+    // Persist a LINE Bot subscription. The backend verifies the token, checks
+    // bot/group membership, encrypts the token at rest, and sends a test
+    // message — surfacing any failure as a 400 with code+hint we can show
+    // verbatim. We DO NOT mark the tier active unless the backend confirms.
     const handleSubscribeLine = async ({ token: lineToken, chatId }) => {
         const token = localStorage.getItem('token');
-        const res = await axios.post('/api/subscription',
-            {
-                channel: 'line',
-                destination: JSON.stringify({ token: lineToken, chatId }),
-                scope: 'all',
-                deviceId: getDeviceId(),
-                deviceLabel: getDeviceLabel(),
-            },
-            { headers: { Authorization: `Bearer ${token}` } }
-        );
-        setCurrentTier('line');
-        return res.data;
+        try {
+            const res = await axios.post('/api/subscription',
+                {
+                    channel: 'line',
+                    destination: JSON.stringify({ token: lineToken, chatId }),
+                    scope: 'all',
+                    deviceId: getDeviceId(),
+                    deviceLabel: getDeviceLabel(),
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setCurrentTier('line');
+            return res.data; // includes { line: { bot, chat } }
+        } catch (err) {
+            // Re-throw a friendly Error so the modal's catch handler can show
+            // a clean message instead of a raw "Request failed with 400".
+            const body = err.response?.data;
+            const msg  = body?.error || err.message || 'เชื่อมต่อ LINE ไม่สำเร็จ';
+            const hint = body?.hint ? `\n${body.hint}` : '';
+            const wrapped = new Error(`${msg}${hint}`);
+            wrapped.code = body?.code;
+            throw wrapped;
+        }
     };
 
     // Unified submit handler for the SubscriptionModal. Returns a promise so
     // the modal can show its activating → activated state correctly.
+    // Returns whatever the underlying API returned (or undefined for free
+     // tier which uses the toggle flow) — the modal uses it to render the
+     // "Bot → Group" success summary for LINE.
     const handleModalSubmit = async (payload) => {
         if (payload.tier === 'free') {
             // Mirror the original toggle behavior verbatim — handleToggleSubscribe
@@ -326,7 +342,7 @@ const Layout = ({ children }) => {
                 return payload.action === 'unsubscribe' ? null : 'free';
             });
         } else if (payload.tier === 'line') {
-            await handleSubscribeLine({ token: payload.token, chatId: payload.chatId });
+            return await handleSubscribeLine({ token: payload.token, chatId: payload.chatId });
         } else if (payload.tier === 'smart') {
             // Smart EE tier — backend wiring TBD; record intent for now.
             const token = localStorage.getItem('token');

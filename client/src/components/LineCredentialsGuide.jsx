@@ -76,12 +76,12 @@ const Lightbox = ({ open, src, alt, onClose }) => {
 
 const TUTORIALS = {
     token: {
-        label: 'Channel Access Token',
+        label: 'How To Get Channel Access Token',
         src: '/line-tutorial-token.png',
         alt: 'ขั้นตอนการดึง Channel Access Token จาก LINE Official Account Manager',
     },
     group: {
-        label: 'Group ID',
+        label: 'How To Get Group ID',
         src: '/line-tutorial-groupid.png',
         alt: 'ขั้นตอนการดึงรหัส Group ID จากลิงก์เชิญกลุ่ม LINE',
     },

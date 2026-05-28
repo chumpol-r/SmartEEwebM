@@ -66,6 +66,11 @@ async function main() {
         console.warn(`${LOG_PREFIX} dispatcher NOT started (VAPID missing)`);
     }
 
+    // 4) LINE dispatcher (per-subscription cursor over NotifyLog → LINE Messaging API).
+    //    Independent of VAPID — runs whenever there are active LINE subscriptions.
+    const lineDispatcher = require('./workers/lineDispatcher');
+    lineDispatcher.start();
+
     // ---- Graceful shutdown ------------------------------------------------
     // Stop the loops first so they don't write to a closed pool, then close
     // the pool, then exit. SIGINT covers Ctrl+C during dev; SIGTERM is what
@@ -77,6 +82,7 @@ async function main() {
         console.log(`${LOG_PREFIX} ${signal} received, shutting down...`);
         try {
             if (dispatcher) dispatcher.stop();
+            lineDispatcher.stop();
             await mqttNotifier.stop();
             await pool.close();
         } catch (err) {

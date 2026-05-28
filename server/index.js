@@ -64,6 +64,7 @@ app.use(async (req, res, next) => {
 });
 
 const { Decrypt, Encrypt, EncryptToken, DecryptToken } = require('./utils/crypto');
+const lineApi = require('./utils/lineApi');
 
 // Middleware to authenticate token
 function authenticateToken(req, res, next) {
@@ -5248,10 +5249,40 @@ app.get('/api/subscription', authenticateToken, async (req, res) => {
                 ORDER BY updated_at DESC
             `);
 
+        // Sanitize destination per channel: never expose secrets to the
+        // client. For LINE we strip tokenCipher and surface only the bot/chat
+        // display info so the UI can render "Connected to: …".
+        const sanitizeDestination = (channel, raw) => {
+            if (!raw) return null;
+            if (channel !== 'line') return raw;
+            try {
+                const d = JSON.parse(raw);
+                return {
+                    chatId: d.chatId || null,
+                    chatType: d.chatType || null,
+                    bot: d.bot ? {
+                        displayName: d.bot.displayName || null,
+                        basicId: d.bot.basicId || null,
+                    } : null,
+                    chat: d.chat ? {
+                        displayName: d.chat.displayName || null,
+                    } : null,
+                    verifiedAt: d.verifiedAt || null,
+                };
+            } catch {
+                // Legacy rows where destination was raw {token, chatId} JSON —
+                // hide the token but keep chatId for compatibility.
+                try {
+                    const legacy = JSON.parse(raw);
+                    return { chatId: legacy.chatId || null, legacy: true };
+                } catch { return null; }
+            }
+        };
+
         const data = result.recordset.map(row => ({
             subscriptionId: row.subscription_id,
             channel: row.channel,
-            destination: row.destination || null,
+            destination: sanitizeDestination(row.channel, row.destination),
             deviceId: row.device_id || null,
             deviceLabel: row.device_label || null,
             scope: row.scope,
@@ -5267,6 +5298,103 @@ app.get('/api/subscription', authenticateToken, async (req, res) => {
     }
 });
 
+// Prepare a LINE channel registration: verify the token + chat, enrich with
+// bot/group identity, encrypt the token at rest, and send a one-shot test
+// message so the user sees the connection works immediately.
+//
+// Returns the serialized `destination` JSON to store, plus a `summary` object
+// to return to the frontend for display.
+async function prepareLineSubscription(rawDestination) {
+    let parsed;
+    try {
+        parsed = typeof rawDestination === 'string' ? JSON.parse(rawDestination) : rawDestination;
+    } catch {
+        const err = new Error('destination ไม่ใช่ JSON ที่ถูกต้อง');
+        err.status = 400;
+        throw err;
+    }
+    const token = parsed?.token?.trim();
+    const chatId = parsed?.chatId?.trim();
+    if (!token || !chatId) {
+        const err = new Error('ต้องระบุทั้ง token และ chatId');
+        err.status = 400;
+        throw err;
+    }
+
+    // 1) Verify token + fetch bot identity
+    let bot;
+    try {
+        bot = await lineApi.getBotInfo(token);
+    } catch (e) {
+        const err = new Error(e.message);
+        err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
+        err.code = e.code;
+        err.hint = e.hint;
+        throw err;
+    }
+
+    // 2) Verify chat target is reachable by this bot
+    let target;
+    try {
+        target = await lineApi.verifyChatTarget(token, chatId);
+    } catch (e) {
+        const err = new Error(e.message);
+        err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
+        err.code = e.code;
+        err.hint = e.hint;
+        throw err;
+    }
+
+    // 3) Send a friendly confirmation message — also acts as the final
+    //    end-to-end check (the previous two only validate read access).
+    try {
+        await lineApi.pushTextMessage(
+            token,
+            chatId,
+            `✅ Smart EE เชื่อมต่อ LINE สำเร็จ\n` +
+            `Bot: ${bot.displayName || bot.basicId || 'Unknown'}\n` +
+            `${target.chatType === 'group' ? 'Group' : target.chatType === 'room' ? 'Room' : 'User'}: ${target.displayName || target.chatId}\n` +
+            `ตั้งแต่นี้คุณจะได้รับการแจ้งเตือนจาก Smart EE ที่นี่`
+        );
+    } catch (e) {
+        const err = new Error(`ส่งข้อความทดสอบไม่สำเร็จ: ${e.message}`);
+        err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
+        err.code = e.code || 'test_message_failed';
+        err.hint = e.hint;
+        throw err;
+    }
+
+    // 4) Encrypt the token at rest. Keep plaintext only for the duration of
+    //    this request. Schema stays the same string column — we just swap
+    //    the field name from `token` to `tokenCipher`.
+    const tokenCipher = EncryptToken(token);
+
+    // Persist only what dispatch & UI actually need. Picture URLs from LINE
+    // CDN can be very long (200+ chars) and we don't render images anywhere
+    // — skipping them keeps the row well within reasonable column sizes.
+    const enriched = {
+        tokenCipher,
+        chatId,
+        chatType: target.chatType,
+        bot: {
+            userId: bot.userId,
+            basicId: bot.basicId,
+            displayName: bot.displayName,
+        },
+        chat: {
+            displayName: target.displayName,
+        },
+        verifiedAt: new Date().toISOString(),
+    };
+
+    const summary = {
+        bot: { displayName: bot.displayName, basicId: bot.basicId },
+        chat: { type: target.chatType, displayName: target.displayName },
+    };
+
+    return { destination: JSON.stringify(enriched), summary };
+}
+
 // Register / confirm a subscription for the current user.
 // Body (all optional): { channel, destination, deviceId, deviceLabel, scope, scopeValue }
 // Defaults to an in-app, all-scope subscription. Idempotent per (user, channel, destination).
@@ -5275,16 +5403,34 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
         const userId = req.user.id;
         const {
             channel = 'inapp',
-            destination = null,
             deviceId = null,
             deviceLabel = null,
             scope = 'all',
             scopeValue = null
         } = req.body || {};
+        let { destination = null } = req.body || {};
+        let lineSummary = null;
 
         const allowedChannels = ['inapp', 'webpush', 'line', 'sms', 'email', 'desktop', 'ios', 'android'];
         if (!allowedChannels.includes(channel)) {
             return res.status(400).json({ success: false, error: `channel must be one of: ${allowedChannels.join(', ')}` });
+        }
+
+        // For LINE channel: verify credentials, enrich with bot/group identity,
+        // encrypt token, send test message — before touching the database.
+        if (channel === 'line') {
+            try {
+                const prepared = await prepareLineSubscription(destination);
+                destination = prepared.destination;
+                lineSummary = prepared.summary;
+            } catch (e) {
+                return res.status(e.status || 400).json({
+                    success: false,
+                    error: e.message,
+                    code: e.code,
+                    hint: e.hint,
+                });
+            }
         }
 
         // Find an existing subscription for this device/destination.
@@ -5338,7 +5484,19 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
                         updated_at   = GETDATE()
                     WHERE subscription_id = @subscriptionId
                 `);
-            return res.json({ success: true, subscriptionId, message: 'Subscription updated' });
+            return res.json({ success: true, subscriptionId, message: 'Subscription updated', line: lineSummary });
+        }
+
+        // For LINE channel: seed last_delivered_log_id = current MAX(log_id)
+        // so a brand-new subscriber doesn't get the entire backlog blasted
+        // at them on the first dispatcher tick. NULL stays NULL for other
+        // channels — webpush has its own status-column flow.
+        let seedCursor = null;
+        if (channel === 'line') {
+            try {
+                const maxRow = await req.db.request().query('SELECT ISNULL(MAX(log_id), 0) AS maxId FROM dbo.NotifyLog');
+                seedCursor = maxRow.recordset[0]?.maxId ?? 0;
+            } catch { /* fall through with NULL — dispatcher treats NULL as 0 */ }
         }
 
         const inserted = await req.db.request()
@@ -5349,16 +5507,28 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
             .input('deviceLabel', sql.NVarChar, deviceLabel ? String(deviceLabel) : null)
             .input('scope', sql.VarChar, String(scope))
             .input('scopeValue', sql.NVarChar, scopeValue ? String(scopeValue) : null)
+            .input('seedCursor', sql.BigInt, seedCursor)
             .query(`
                 INSERT INTO dbo.UserNotificationSubscription
-                    (user_id, channel, destination, device_id, device_label, scope, scope_value, is_active, created_at, updated_at)
+                    (user_id, channel, destination, device_id, device_label, scope, scope_value, is_active, created_at, updated_at, last_delivered_log_id)
                 OUTPUT INSERTED.subscription_id
-                VALUES (@userId, @channel, @destination, @deviceId, @deviceLabel, @scope, @scopeValue, 1, GETDATE(), GETDATE())
+                VALUES (@userId, @channel, @destination, @deviceId, @deviceLabel, @scope, @scopeValue, 1, GETDATE(), GETDATE(), @seedCursor)
             `);
 
-        res.json({ success: true, subscriptionId: inserted.recordset[0].subscription_id, message: 'Subscribed successfully' });
+        res.json({ success: true, subscriptionId: inserted.recordset[0].subscription_id, message: 'Subscribed successfully', line: lineSummary });
     } catch (err) {
         console.error('Error saving subscription:', err);
+        // Detect the specific SQL Server truncation error so we can guide the
+        // operator: the destination column needs to be NVARCHAR(MAX).
+        const msg = String(err?.message || '');
+        if (msg.includes('String or binary data would be truncated')) {
+            return res.status(500).json({
+                success: false,
+                error: 'ข้อมูลยาวเกินกว่าคอลัมน์ destination จะรับได้',
+                code: 'db_truncation',
+                hint: 'รัน: ALTER TABLE dbo.UserNotificationSubscription ALTER COLUMN destination NVARCHAR(MAX) NULL;',
+            });
+        }
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -5960,6 +6130,7 @@ if (process.env.ENABLE_MQTT_WORKER === 'true') {
     console.log('[workers] ENABLE_MQTT_WORKER=true → starting MQTT notifier + dispatcher in-process');
     const mqttNotifier = require('./workers/mqttNotifier');
     const webpushDispatcher = require('./workers/webpushDispatcher');
+    const lineDispatcher = require('./workers/lineDispatcher');
     connectToDb()
         .then(pool => {
             global.dbPool = pool;
@@ -5968,6 +6139,8 @@ if (process.env.ENABLE_MQTT_WORKER === 'true') {
         .then(() => {
             if (webpushEnabled) webpushDispatcher.start();
             else console.warn('[webpush] dispatcher NOT started (VAPID missing)');
+            // LINE dispatcher has no global config to gate — it polls per-subscription.
+            lineDispatcher.start();
         })
         .catch(err => console.error('[workers] failed to start in-process:', err));
 } else {
