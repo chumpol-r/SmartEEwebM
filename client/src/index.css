@@ -87,6 +87,21 @@ body {
   -webkit-text-fill-color: transparent;
 }
 
+/* Notification subscription — tier tokens (extend, don't replace, the existing slate/blue/emerald palette) */
+:root {
+  --tier-free:   #3b82f6;  /* blue-500  — Web Push */
+  --tier-smart:  #a855f7;  /* violet-500 — Smart EE */
+  --tier-line:   #22c55e;  /* green-500 — LINE Bot */
+
+  --gradient-free:  linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  --gradient-smart: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+  --gradient-line:  linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  --gradient-hero:  linear-gradient(135deg, rgba(59,130,246,0.18) 0%, rgba(168,85,247,0.18) 50%, rgba(34,197,94,0.18) 100%);
+
+  --shadow-elevated: 0 25px 50px -12px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.06);
+  --shadow-tier:     0 10px 30px -10px rgba(59, 130, 246, 0.45);
+}
+
 /* React Flow Custom Styles */
 .connecting-mode .react-flow__handle {
   opacity: 1 !important;

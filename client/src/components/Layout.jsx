@@ -4,6 +4,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Activity, FileText, Settings, LogOut, Menu, X, BarChart2, DollarSign, PieChart, User, Shield, Monitor, Zap, PencilRuler, Leaf, Eye, ChevronDown, ChevronRight, Search, Bell, BellRing, BellOff, CheckCircle2, Loader2, ClipboardList } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import SubscribeButton from './SubscribeButton.jsx';
+import SubscriptionModal from './SubscriptionModal.jsx';
 
 // Utility for tailwind classes
 function cn(...inputs) {
@@ -142,6 +144,10 @@ const Layout = ({ children }) => {
     const [subscribing, setSubscribing] = useState(false); // covers both subscribe & unsubscribe
     // Hint banner that appears on render then fades away after a few seconds
     const [showSubHint, setShowSubHint] = useState(false);
+    // Subscription modal
+    const [subModalOpen, setSubModalOpen] = useState(false);
+    // Highest active tier across all device subscriptions (line > smart > free > null)
+    const [currentTier, setCurrentTier] = useState(null);
 
     // Check current subscription status on mount
     useEffect(() => {
@@ -155,11 +161,14 @@ const Layout = ({ children }) => {
                 // Reflect the status of THIS device only (match on our device_id),
                 // so the button doesn't show "subscribed" because of another device.
                 const myDeviceId = getDeviceId();
-                const mine = (res.data?.data || []).find(
-                    s => s.channel === 'webpush' && s.deviceId === myDeviceId
-                );
+                const all = res.data?.data || [];
+                const mine = all.find(s => s.channel === 'webpush' && s.deviceId === myDeviceId);
                 setIsSubscribed(!!mine);
                 setSubscriptionId(mine?.subscriptionId ?? null);
+                // Resolve highest tier across user's subscriptions
+                const hasLine  = all.some(s => s.channel === 'line');
+                const hasSmart = all.some(s => s.channel === 'smart');
+                setCurrentTier(hasLine ? 'line' : hasSmart ? 'smart' : mine ? 'free' : null);
                 // Only nudge users who haven't subscribed on this device yet
                 if (!mine) setShowSubHint(true);
             } catch (error) {
@@ -282,6 +291,57 @@ const Layout = ({ children }) => {
     const handleToggleSubscribe = () => {
         if (subscribing) return;
         return isSubscribed ? handleUnsubscribe() : handleSubscribe();
+    };
+
+    // Persist a LINE Bot subscription. Backend POST /api/subscription accepts a
+    // free-form `destination` per channel — we serialize { token, chatId } as JSON.
+    const handleSubscribeLine = async ({ token: lineToken, chatId }) => {
+        const token = localStorage.getItem('token');
+        const res = await axios.post('/api/subscription',
+            {
+                channel: 'line',
+                destination: JSON.stringify({ token: lineToken, chatId }),
+                scope: 'all',
+                deviceId: getDeviceId(),
+                deviceLabel: getDeviceLabel(),
+            },
+            { headers: { Authorization: `Bearer ${token}` } }
+        );
+        setCurrentTier('line');
+        return res.data;
+    };
+
+    // Unified submit handler for the SubscriptionModal. Returns a promise so
+    // the modal can show its activating → activated state correctly.
+    const handleModalSubmit = async (payload) => {
+        if (payload.tier === 'free') {
+            // Mirror the original toggle behavior verbatim — handleToggleSubscribe
+            // picks subscribe vs unsubscribe from `isSubscribed` and runs the full
+            // browser-side flow (permission, SW, pushManager, POST/DELETE).
+            await handleToggleSubscribe();
+            // Reflect tier: only downgrade if higher tiers aren't active.
+            setCurrentTier((t) => {
+                if (t === 'line' || t === 'smart') return t;
+                // After toggle, isSubscribed has flipped — use the action hint.
+                return payload.action === 'unsubscribe' ? null : 'free';
+            });
+        } else if (payload.tier === 'line') {
+            await handleSubscribeLine({ token: payload.token, chatId: payload.chatId });
+        } else if (payload.tier === 'smart') {
+            // Smart EE tier — backend wiring TBD; record intent for now.
+            const token = localStorage.getItem('token');
+            await axios.post('/api/subscription',
+                {
+                    channel: 'smart',
+                    destination: JSON.stringify({ enabled: true }),
+                    scope: 'all',
+                    deviceId: getDeviceId(),
+                    deviceLabel: getDeviceLabel(),
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            ).catch(() => { /* tolerate until backend lands */ });
+            setCurrentTier((t) => t === 'line' ? t : 'smart');
+        }
     };
 
     useEffect(() => {
@@ -525,53 +585,13 @@ const Layout = ({ children }) => {
                                 </div>
                             </div>
 
-                            {/* Subscribe button */}
-                            <button
-                                onClick={handleToggleSubscribe}
-                                disabled={subscribing}
-                                title={isSubscribed ? 'คลิกเพื่อยกเลิกการแจ้งเตือน' : 'สมัครรับการแจ้งเตือน'}
-                                className={cn(
-                                    "group relative flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full",
-                                    "overflow-hidden transition-all duration-300 ease-out cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed",
-                                    isSubscribed
-                                        // Subscribed: green gradient → turns red on hover to signal "cancel"
-                                        ? "text-white bg-gradient-to-r from-emerald-500 to-green-500 shadow-lg shadow-emerald-500/30 hover:from-red-500 hover:to-rose-500 hover:shadow-red-500/30 hover:scale-105 active:scale-95 animate-[sub-pop_0.4s_ease-out]"
-                                        // Idle: brand gradient, lifts + glows on hover
-                                        : "text-white bg-gradient-to-r from-blue-500 to-emerald-500 shadow-lg shadow-blue-500/20 hover:shadow-xl hover:shadow-blue-500/40 hover:scale-105 active:scale-95"
-                                )}
-                            >
-                                {/* Shimmer sweep on hover (idle only) */}
-                                {!isSubscribed && (
-                                    <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent group-hover:animate-[sub-shimmer_0.9s_ease-out]" />
-                                )}
-
-                                {/* Attention ping ring while unsubscribed and idle */}
-                                {!isSubscribed && !subscribing && (
-                                    <span className="pointer-events-none absolute inset-0 rounded-full ring-2 ring-blue-400/60 animate-[sub-ping_2.2s_cubic-bezier(0,0,0.2,1)_infinite]" />
-                                )}
-
-                                <span className="relative flex items-center gap-2">
-                                    {subscribing ? (
-                                        <Loader2 size={18} className="animate-spin" />
-                                    ) : isSubscribed ? (
-                                        <>
-                                            {/* Check by default, switches to bell-off on hover */}
-                                            <CheckCircle2 size={18} className="group-hover:hidden animate-[sub-pop_0.4s_ease-out]" />
-                                            <BellOff size={18} className="hidden group-hover:inline" />
-                                        </>
-                                    ) : (
-                                        <BellRing size={18} className="origin-top group-hover:animate-[sub-swing_0.6s_ease-in-out]" />
-                                    )}
-                                    <span className="hidden md:inline">
-                                        {subscribing
-                                            ? (isSubscribed ? 'กำลังยกเลิก...' : 'กำลังสมัคร...')
-                                            : isSubscribed
-                                                // Label flips to "cancel" on hover
-                                                ? (<><span className="group-hover:hidden">รับการแจ้งเตือนอยู่</span><span className="hidden group-hover:inline">ยกเลิกการแจ้งเตือน</span></>)
-                                                : 'รับการแจ้งเตือน'}
-                                    </span>
-                                </span>
-                            </button>
+                            {/* Subscribe button — opens the SubscriptionModal */}
+                            <SubscribeButton
+                                onClick={() => { setShowSubHint(false); setSubModalOpen(true); }}
+                                currentTier={currentTier}
+                                busy={subscribing}
+                                open={subModalOpen}
+                            />
 
                             {/* Action Buttons - Always Visible */}
                             <Link
@@ -616,6 +636,14 @@ const Layout = ({ children }) => {
                     {children}
                 </main>
             </div>
+
+            <SubscriptionModal
+                open={subModalOpen}
+                onClose={() => setSubModalOpen(false)}
+                currentTier={currentTier}
+                webPushSubscribed={isSubscribed}
+                onSubmit={handleModalSubmit}
+            />
         </div >
     );
 };
