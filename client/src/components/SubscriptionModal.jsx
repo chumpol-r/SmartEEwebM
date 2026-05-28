@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import LineCredentialsGuide from './LineCredentialsGuide.jsx';
 
 function cn(...inputs) {
     return twMerge(clsx(inputs));
@@ -82,9 +83,9 @@ const SMART_FEATURES = [
 ];
 
 // ---------- SecretField ----------
-function SecretField({ id, label, hint, value, onChange, visible, onToggle, onCopy, copied, placeholder }) {
+function SecretField({ id, label, hint, value, onChange, visible, onToggle, onCopy, copied, placeholder, guide }) {
     return (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
             <div className="flex items-center justify-between">
                 <label htmlFor={id} className="text-sm font-medium text-slate-200">
                     {label}
@@ -93,6 +94,7 @@ function SecretField({ id, label, hint, value, onChange, visible, onToggle, onCo
                     <Shield size={10} /> Encrypted
                 </span>
             </div>
+            {guide && <div className="pt-0.5">{guide}</div>}
             <div className="relative">
                 <input
                     id={id}
@@ -437,31 +439,41 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 gap-4">
-                                    <SecretField
-                                        id="line-token"
-                                        label="Channel Access Token"
-                                        hint="Find this in LINE Developers Console → Messaging API → Channel access token"
-                                        value={lineToken}
-                                        onChange={setLineToken}
-                                        visible={tokenVisible}
-                                        onToggle={() => setTokenVisible(v => !v)}
-                                        onCopy={() => handleCopy(lineToken, setTokenCopied)}
-                                        copied={tokenCopied}
-                                        placeholder="Paste long-lived channel access token"
-                                    />
-                                    <SecretField
-                                        id="line-chatid"
-                                        label="Chat / Group / Room ID"
-                                        hint="The destination ID where notifications will be sent (User ID, Group ID, or Room ID)"
-                                        value={lineChatId}
-                                        onChange={setLineChatId}
-                                        visible={chatVisible}
-                                        onToggle={() => setChatVisible(v => !v)}
-                                        onCopy={() => handleCopy(lineChatId, setChatCopied)}
-                                        copied={chatCopied}
-                                        placeholder="e.g. U1234abcd… or C1234abcd…"
-                                    />
+                                <div className="space-y-4">
+                                    <div>
+                                        <SecretField
+                                            id="line-token"
+                                            label="Channel Access Token"
+                                            hint="Find this in LINE Developers Console → Messaging API → Channel access token"
+                                            value={lineToken}
+                                            onChange={setLineToken}
+                                            visible={tokenVisible}
+                                            onToggle={() => setTokenVisible(v => !v)}
+                                            onCopy={() => handleCopy(lineToken, setTokenCopied)}
+                                            copied={tokenCopied}
+                                            placeholder="Paste long-lived channel access token"
+                                        />
+                                        <div className="mt-2">
+                                            <LineCredentialsGuide type="token" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <SecretField
+                                            id="line-chatid"
+                                            label="Chat / Group / Room ID"
+                                            hint="The destination ID where notifications will be sent (User ID, Group ID, or Room ID)"
+                                            value={lineChatId}
+                                            onChange={setLineChatId}
+                                            visible={chatVisible}
+                                            onToggle={() => setChatVisible(v => !v)}
+                                            onCopy={() => handleCopy(lineChatId, setChatCopied)}
+                                            copied={chatCopied}
+                                            placeholder="e.g. U1234abcd… or C1234abcd…"
+                                        />
+                                        <div className="mt-2">
+                                            <LineCredentialsGuide type="group" />
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div className="flex items-start gap-2 p-3 rounded-lg bg-slate-800/60 border border-slate-700">
