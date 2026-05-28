@@ -39,7 +39,6 @@ const Realtime = () => {
                 const res = await axios.get('/api/meters', {
                     headers: { Authorization: `Bearer ${token}` }
                 });
-                console.log(res.data);
 
                 // Process meters to match legacy logic:
                 // 1. Use 'serial' column if available, otherwise 'val'
@@ -227,9 +226,7 @@ const Realtime = () => {
             });
         } else {
             // If already connected, just update subscriptions
-            if (clientRef.current.connected) {
-                subscribeToMeters(clientRef.current, selectedMeters);
-            }
+            subscribeToMeters(clientRef.current, selectedMeters);
         }
 
         return () => {
@@ -242,8 +239,7 @@ const Realtime = () => {
     }, [selectedMeters]);
 
     const subscribeToMeters = (client, metersToSubscribe) => {
-        // Unsubscribe from all first (simple approach, or track active subscriptions)
-        // client.unsubscribe('#'); 
+        if (!client || !client.connected || client.disconnecting || client.disconnected) return;
 
         metersToSubscribe.forEach(serial => {
             if (serial) {

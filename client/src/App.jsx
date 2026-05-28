@@ -74,7 +74,6 @@ const ProtectedRoute = ({ children }) => {
                 const response = await axios.get('/api/user/permissions', {
                     headers: { Authorization: `Bearer ${token}` }
                 });
-                console.log(response.data, 'Permissions API response');
                 const allowedMenus = response.data;
 
 
