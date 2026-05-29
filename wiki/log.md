@@ -16,3 +16,6 @@
 
 ประเด็นสำคัญที่บันทึก: stack จริงคือ React 18 + Express 4 + **SQL Server** + **custom token (ไม่ใช่ JWT)**
 — ไม่ตรงกับ `C:\Workspaces\CLAUDE.md` (อธิบาย SmartCatcherPro คนละโปรเจกต์).
+
+## [2026-05-29] ingest | คู่มือใช้งานสำหรับทีม
+สร้าง `HOW-TO-USE.md` (คู่มือเข้าใจง่าย + คลังตัวอย่าง prompt หลาย use case) และลิงก์จาก `index.md`.

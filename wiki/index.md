@@ -5,6 +5,9 @@
 
 _อัปเดตล่าสุด: 2026-05-29_
 
+## 👋 เริ่มที่นี่
+- [HOW-TO-USE](HOW-TO-USE.md) — **คู่มือใช้งานฉบับเข้าใจง่าย + คลังตัวอย่าง prompt** (อ่านก่อนถ้าเพิ่งเริ่ม/เพิ่งเข้าทีม).
+
 ## Architecture
 - [overview](architecture/overview.md) — ภาพรวม 3 ส่วน (client / API / worker) + DB + deployment.
 - [auth-and-permissions](architecture/auth-and-permissions.md) — custom token (ไม่ใช่ JWT) + ระบบสิทธิ์ Group/Site/Super Group.
