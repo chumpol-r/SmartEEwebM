@@ -58,6 +58,10 @@ async function dispatchWebPush() {
         //   * nc.message is NULL or empty string
         //   * the NotifyLog row wasn't tied to a config (notify_id IS NULL)
         // NULLIF() trims empty strings so COALESCE skips them.
+        // Channel routing: alarm_type is a CSV of channels (e.g. 'device,line').
+        // Only rows that include 'device' should reach webpush. Rows with no
+        // matching channel are flipped to 'sent' below so they don't sit in
+        // the pending queue forever.
         const pending = await global.dbPool.request().query(`
             SELECT TOP (50)
                 nl.log_id, nl.mqtt_serial, nl.dbkey, nl.level, nl.value, nl.point,
@@ -70,7 +74,27 @@ async function dispatchWebPush() {
             ORDER BY nl.log_id ASC
         `);
 
+        const hasChannel = (csv, ch) =>
+            String(csv || '').toLowerCase().split(',').map(s => s.trim()).includes(ch);
+
         for (const row of pending.recordset) {
+            // Channel gate: if this row isn't routed to 'device', mark sent
+            // (with delivered_count=0) and move on. Without this, rows
+            // configured for LINE-only would stay 'pending' forever and the
+            // queue would grow unbounded.
+            if (!hasChannel(row.alarm_type, 'device')) {
+                await global.dbPool.request()
+                    .input('logId', sql.BigInt, row.log_id)
+                    .query(`
+                        UPDATE dbo.NotifyLog
+                        SET status = 'sent', sent_at = GETDATE(),
+                            delivered_count = 0, attempts = attempts + 1
+                        WHERE log_id = @logId
+                    `);
+                console.log(`[webpush] log ${row.log_id} skipped (channels='${row.alarm_type || ''}')`);
+                continue;
+            }
+
             // Find active webpush subscriptions that match this serial's scope
             // AND belong to a user inside the alarm's organization. Super Group
             // users (WebGroup.c_active = 'Z') receive every alarm. Everyone

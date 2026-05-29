@@ -5555,6 +5555,23 @@ app.delete('/api/subscription/:id', authenticateToken, async (req, res) => {
     }
 });
 
+// NotifyConfig.alarm_type stores notification channels as a CSV of tokens.
+// Allowed today: 'device' (webpush), 'line' (LINE Messaging). Empty = no
+// notifications. Unknown tokens are dropped silently so a future client that
+// sends a value we don't recognize yet doesn't bring down the save endpoint.
+const ALLOWED_CHANNELS = new Set(['device', 'line']);
+const CHANNEL_ORDER = ['device', 'line'];
+function normalizeChannels(value) {
+    if (value == null) return '';
+    const tokens = String(value)
+        .toLowerCase()
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+    const kept = new Set(tokens.filter(t => ALLOWED_CHANNELS.has(t)));
+    return CHANNEL_ORDER.filter(t => kept.has(t)).join(',');
+}
+
 app.get('/api/notify', async (req, res) => {
     try {
         const { serials } = req.query; // comma-separated serial names e.g. "Meter1,Meter2"
@@ -5660,7 +5677,7 @@ app.post('/api/notify', async (req, res) => {
                     .input('point', sql.Decimal(10, 2), parseFloat(point))
                     .input('delay', sql.Int, parseInt(delay))
                     .input('message', sql.NVarChar, String(message || ''))
-                    .input('alarmType', sql.VarChar, String(alarmType || ''))
+                    .input('alarmType', sql.VarChar(50), normalizeChannels(alarmType))
                     .input('updatedBy', sql.UniqueIdentifier, updatedBy)
                     .query(`
                         UPDATE dbo.NotifyConfig
@@ -5684,7 +5701,7 @@ app.post('/api/notify', async (req, res) => {
                     .input('point', sql.Decimal(10, 2), parseFloat(point))
                     .input('delay', sql.Int, parseInt(delay))
                     .input('message', sql.NVarChar, String(message || ''))
-                    .input('alarmType', sql.VarChar, String(alarmType || ''))
+                    .input('alarmType', sql.VarChar(50), normalizeChannels(alarmType))
                     .input('cId', sql.VarChar, cId)
                     .input('ownerType', sql.VarChar, ownerType)
                     .input('createdBy', sql.UniqueIdentifier, createdBy)
@@ -5771,7 +5788,7 @@ app.post('/api/notify/update', async (req, res) => {
                 .input('point', sql.Decimal(10, 2), parseFloat(row.point) || 0)
                 .input('delay', sql.Int, parseInt(row.delay) || 0)
                 .input('message', sql.NVarChar, String(row.message || ''))
-                .input('alarmType', sql.VarChar, String(row.alarmType || ''))
+                .input('alarmType', sql.VarChar(50), normalizeChannels(row.alarmType))
                 .query(`
                     UPDATE dbo.NotifyConfig
                     SET point      = @point,
@@ -5799,7 +5816,8 @@ app.post('/api/notify/update', async (req, res) => {
 // (lost-update protection via optimistic locking).
 // Any failure (validation, UNIQUE collision, stale row, DB error) rolls back BOTH sets.
 const NC_VALID_LEVELS = ['Very High', 'High', 'Normal', 'Low', 'Very Low'];
-const NC_VALID_ALARM_TYPES = ['Dialog', 'Email', 'SMS', ''];
+// alarm_type is now a CSV of channel tokens (see normalizeChannels above).
+// Unknown tokens are dropped silently — no per-row rejection.
 app.post('/api/notify/save', async (req, res) => {
     const { creates = [], updates = [] } = req.body || {};
 
@@ -5818,9 +5836,6 @@ app.post('/api/notify/save', async (req, res) => {
         if (!NC_VALID_LEVELS.includes(c.levelName)) {
             return res.status(400).json({ success: false, error: `Invalid level: "${c.levelName}" (must be one of ${NC_VALID_LEVELS.join(', ')})` });
         }
-        if (!NC_VALID_ALARM_TYPES.includes(c.alarmType ?? '')) {
-            return res.status(400).json({ success: false, error: `Invalid alarmType: "${c.alarmType}" (must be one of ${NC_VALID_ALARM_TYPES.filter(Boolean).join(', ')} or empty)` });
-        }
         if (typeof c.point !== 'number' || Number.isNaN(c.point)) {
             return res.status(400).json({ success: false, error: `create row (${c.dbKey}/${c.levelName}): point must be a number` });
         }
@@ -5836,9 +5851,6 @@ app.post('/api/notify/save', async (req, res) => {
         }
         if (!u.updatedAt) {
             return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}) missing updatedAt — required for lost-update protection` });
-        }
-        if (u.alarmType !== undefined && !NC_VALID_ALARM_TYPES.includes(u.alarmType ?? '')) {
-            return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}): invalid alarmType "${u.alarmType}"` });
         }
         if (u.point !== undefined && (typeof u.point !== 'number' || Number.isNaN(u.point))) {
             return res.status(400).json({ success: false, error: `update row (notifyId=${u.notifyId}): point must be a number` });
@@ -5934,7 +5946,7 @@ app.post('/api/notify/save', async (req, res) => {
                 .input('point', sql.Decimal(10, 2), parseFloat(u.point) || 0)
                 .input('delay', sql.Int, parseInt(u.delay) || 0)
                 .input('message', sql.NVarChar, String(u.message || ''))
-                .input('alarmType', sql.VarChar, String(u.alarmType || ''))
+                .input('alarmType', sql.VarChar(50), normalizeChannels(u.alarmType))
                 .query(`
                     UPDATE dbo.NotifyConfig
                     SET point      = @point,
@@ -5973,7 +5985,7 @@ app.post('/api/notify/save', async (req, res) => {
                 .input('point', sql.Decimal(10, 2), parseFloat(c.point) || 0)
                 .input('delay', sql.Int, parseInt(c.delay) || 0)
                 .input('message', sql.NVarChar, String(c.message || ''))
-                .input('alarmType', sql.VarChar, String(c.alarmType || ''))
+                .input('alarmType', sql.VarChar(50), normalizeChannels(c.alarmType))
                 .query(`
                     INSERT INTO dbo.NotifyConfig (serial_id, serial_name, mqtt_serial, dbkey, level, point, delay, message, alarm_type, created_at, updated_at)
                     VALUES (@serialId, @serialName, @mqttSerial, @dbKey, @level, @point, @delay, @message, @alarmType, GETDATE(), GETDATE())

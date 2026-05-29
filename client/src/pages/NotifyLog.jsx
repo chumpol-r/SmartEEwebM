@@ -351,7 +351,7 @@ const NotifyLog = () => {
                                 <th className="px-3 py-3 whitespace-nowrap text-right">Value</th>
                                 <th className="px-3 py-3 whitespace-nowrap text-right">Point</th>
                                 <th className="px-3 py-3">Message</th>
-                                <th className="px-3 py-3 whitespace-nowrap">Alarm Type</th>
+                                <th className="px-3 py-3 whitespace-nowrap">Channels</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Status</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Event Time</th>
                             </tr>
@@ -430,7 +430,30 @@ const NotifyLog = () => {
                                         <td className="px-3 py-2.5 text-slate-200 max-w-xs truncate" title={r.message}>
                                             {r.message || '-'}
                                         </td>
-                                        <td className="px-3 py-2.5 text-slate-300">{r.alarmType || '-'}</td>
+                                        <td className="px-3 py-2.5">
+                                            {(() => {
+                                                const chans = String(r.alarmType || '')
+                                                    .toLowerCase()
+                                                    .split(',')
+                                                    .map(s => s.trim())
+                                                    .filter(Boolean);
+                                                if (chans.length === 0) return <span className="text-slate-500">-</span>;
+                                                const styleFor = (c) =>
+                                                    c === 'device' ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                                                    : c === 'line' ? 'bg-green-500/15 text-green-300 border-green-500/30'
+                                                    : 'bg-slate-500/15 text-slate-300 border-slate-500/30';
+                                                const labelFor = (c) => c === 'device' ? 'Device' : c === 'line' ? 'LINE' : c;
+                                                return (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {chans.map(c => (
+                                                            <span key={c} className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${styleFor(c)}`}>
+                                                                {labelFor(c)}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })()}
+                                        </td>
                                         <td className="px-3 py-2.5">
                                             <Badge value={r.status} colorMap={STATUS_COLORS} />
                                         </td>

@@ -2,6 +2,49 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { X } from 'lucide-react';
 
+// Channels are stored as a CSV in NotifyConfig.alarm_type, e.g. 'device,line'.
+// 'device' = webpush to subscribed devices; 'line' = LINE Messaging.
+// Empty string means "do not notify" — the admin has to opt-in.
+const CHANNEL_OPTIONS = [
+    { value: 'device', label: 'Device' },
+    { value: 'line',   label: 'LINE'   },
+];
+
+const parseChannels = (csv) =>
+    String(csv || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+
+const toggleChannel = (csv, ch, on) => {
+    const set = new Set(parseChannels(csv));
+    if (on) set.add(ch); else set.delete(ch);
+    // Preserve a stable order so saved values diff cleanly.
+    return CHANNEL_OPTIONS.filter(o => set.has(o.value)).map(o => o.value).join(',');
+};
+
+// Drop-in replacement for the old <select name=...|alarmType> control.
+// Emits the same synthetic event shape so handleChangeData keeps working.
+const ChannelPicker = ({ name, value, onChange, disabled }) => {
+    const selected = new Set(parseChannels(value));
+    const fire = (ch, checked) => {
+        onChange({ target: { name, value: toggleChannel(value, ch, checked) } });
+    };
+    return (
+        <div className={`flex items-center gap-2 ${disabled ? 'opacity-40 pointer-events-none' : ''}`}>
+            {CHANNEL_OPTIONS.map(opt => (
+                <label key={opt.value} className="flex items-center gap-1 text-xs text-slate-200 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={selected.has(opt.value)}
+                        onChange={(e) => fire(opt.value, e.target.checked)}
+                        disabled={disabled}
+                        className="accent-blue-500"
+                    />
+                    {opt.label}
+                </label>
+            ))}
+        </div>
+    );
+};
+
 const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetrics = [] }) => {
     const [selectedSerial, setSelectedSerial] = useState(null);
     const [notificationSettings, setNotificationSettings] = useState({});
@@ -342,7 +385,7 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
                                                 <div>Point</div>
                                                 <div>Delay</div>
                                                 <div>Message</div>
-                                                <div>Alarm</div>
+                                                <div>Channels</div>
                                             </div>
 
                                             {/* Settings Rows — displayed Very High (top) -> Very Low (bottom).
@@ -373,17 +416,11 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
                                                                 onChange={handleChangeData}
                                                                 className="bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs text-white focus:border-blue-500 focus:outline-none"
                                                             />
-                                                            <select
+                                                            <ChannelPicker
                                                                 name={`${metric.serial}|${metricKey}|${idx}|alarmType`}
                                                                 value={currentValue.alarmType || ''}
                                                                 onChange={handleChangeData}
-                                                                className="bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs text-white focus:border-blue-500 focus:outline-none"
-                                                            >
-                                                                <option value="">Select...</option>
-                                                                <option value="Dialog">Dialog</option>
-                                                                <option value="Email">Email</option>
-                                                                <option value="SMS">SMS</option>
-                                                            </select>
+                                                            />
                                                         </div>
                                                     );
                                                 }
@@ -426,18 +463,12 @@ const SetNotifyModal = ({ isOpen, onClose, title = 'Set Notifys', selectedMetric
                                                                     : 'border border-slate-600 focus:border-blue-500'
                                                             }`}
                                                         />
-                                                        <select
+                                                        <ChannelPicker
                                                             name={`${metric.serial}|${metricKey}|${idx}|alarmType`}
                                                             value={currentValue.alarmType || ''}
                                                             onChange={handleChangeData}
                                                             disabled={!(Number(currentValue.point) > 0)}
-                                                            className="bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs text-white focus:border-blue-500 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
-                                                        >
-                                                            <option value="">Select...</option>
-                                                            <option value="Dialog">Dialog</option>
-                                                            <option value="Email">Email</option>
-                                                            <option value="SMS">SMS</option>
-                                                        </select>
+                                                        />
 
                                                     </div>
                                                 );

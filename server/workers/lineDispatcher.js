@@ -110,12 +110,13 @@ async function dispatchLine() {
                     SELECT TOP (${LINE_BATCH})
                         nl.log_id, nl.mqtt_serial, nl.dbkey, nl.level, nl.value, nl.point,
                         COALESCE(NULLIF(nc.message, ''), nl.message) AS message,
-                        nl.event_time, nl.event_type, nl.c_name
+                        nl.event_time, nl.event_type, nl.c_name, nl.alarm_type
                     FROM dbo.NotifyLog nl
                     LEFT JOIN dbo.NotifyConfig nc ON nc.notify_id = nl.notify_id
                     WHERE nl.log_id > @cursor
                       AND (@scope = 'all' OR (@scope = 'serial' AND UPPER(nl.mqtt_serial) = UPPER(@scopeValue)))
                       AND (@isSuper = 1 OR (nl.c_id IS NOT NULL AND nl.c_id = @userCId))
+                      AND (',' + LOWER(REPLACE(ISNULL(nl.alarm_type, ''), ' ', '')) + ',') LIKE '%,line,%'
                     ORDER BY nl.log_id ASC
                 `);
             const logs = logsRes.recordset;

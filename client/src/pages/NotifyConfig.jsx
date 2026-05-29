@@ -444,7 +444,7 @@ const NotifyConfig = () => {
                                                         <th className="p-2 w-28">point</th>
                                                         <th className="p-2 w-24">delay</th>
                                                         <th className="p-2">message</th>
-                                                        {/* alarm type column hidden — value still saved via payload; edit via SetNotifyModal */}
+                                                        <th className="p-2 w-40">channels</th>
                                                         <th className="p-2 w-12"></th>
                                                     </tr>
                                                 </thead>
@@ -494,7 +494,39 @@ const NotifyConfig = () => {
                                                                         className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
                                                                     />
                                                                 </td>
-                                                                {/* alarm type cell hidden — r.alarmType still preserved in state and sent on save */}
+                                                                <td className="p-2">
+                                                                    <div className="flex items-center gap-3">
+                                                                        {['device', 'line'].map(ch => {
+                                                                            const set = new Set(
+                                                                                String(r.alarmType || '')
+                                                                                    .toLowerCase()
+                                                                                    .split(',')
+                                                                                    .map(s => s.trim())
+                                                                                    .filter(Boolean)
+                                                                            );
+                                                                            const checked = set.has(ch);
+                                                                            return (
+                                                                                <label key={ch} className="flex items-center gap-1 text-xs text-slate-300 cursor-pointer">
+                                                                                    <input
+                                                                                        type="checkbox"
+                                                                                        checked={checked}
+                                                                                        onChange={(e) => {
+                                                                                            const next = new Set(set);
+                                                                                            if (e.target.checked) next.add(ch); else next.delete(ch);
+                                                                                            handleFieldChange(
+                                                                                                r.notifyId,
+                                                                                                'alarmType',
+                                                                                                ['device', 'line'].filter(x => next.has(x)).join(',')
+                                                                                            );
+                                                                                        }}
+                                                                                        className="accent-blue-500"
+                                                                                    />
+                                                                                    {ch === 'device' ? 'Device' : 'LINE'}
+                                                                                </label>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </td>
                                                                 <td className="p-2 text-right">
                                                                     <button
                                                                         onClick={() => handleDeleteRow(r.notifyId)}
