@@ -220,7 +220,7 @@ async function insertNotifyLog(pool, params) {
             .input('value',         sql.Decimal(18,4), value)
             .input('point',         sql.Decimal(18,4), cfg.point)
             .input('message',       sql.NVarChar,      cfg.message)
-            .input('alarmType',     sql.VarChar,       cfg.alarmType)
+            .input('alarmType',     sql.VarChar(50),   cfg.alarmType || '')
             .input('eventTime',     sql.DateTime,      eventTime)
             .input('eventType',     sql.VarChar,       eventType)
             .input('correlationId', sql.BigInt,        correlationId)

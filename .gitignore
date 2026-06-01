@@ -72,3 +72,4 @@ coverage/
 # Production
 *.tar.gz
 *.zip
+server/.env.example

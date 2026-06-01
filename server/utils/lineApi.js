@@ -13,6 +13,8 @@
 //
 // Uses Node 20+ global fetch — no extra dependency.
 
+const crypto = require('crypto');
+
 const LINE_API_BASE = 'https://api.line.me/v2/bot';
 
 class LineApiError extends Error {
@@ -157,9 +159,45 @@ async function pushTextMessage(token, chatId, text) {
     });
 }
 
+// Reply to a webhook event using its replyToken. Token is single-use and
+// valid for ~30 seconds — must be sent immediately when the event arrives.
+// Docs: POST /v2/bot/message/reply
+async function replyTextMessage(token, replyToken, text) {
+    return lineFetch('/message/reply', {
+        token,
+        method: 'POST',
+        body: {
+            replyToken,
+            messages: [{ type: 'text', text: String(text).slice(0, 5000) }],
+        },
+    });
+}
+
+// Verify the X-Line-Signature header against the raw request body.
+// LINE signs every webhook delivery with HMAC-SHA256 using the channel
+// secret; rejecting unsigned requests prevents anyone from POSTing forged
+// events at our endpoint. Returns true on match.
+function verifyWebhookSignature(channelSecret, rawBody, signatureHeader) {
+    if (!channelSecret || !rawBody || !signatureHeader) return false;
+    const expected = crypto
+        .createHmac('SHA256', channelSecret)
+        .update(rawBody)
+        .digest('base64');
+    // Constant-time compare to avoid timing attacks.
+    try {
+        const a = Buffer.from(expected);
+        const b = Buffer.from(String(signatureHeader));
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch {
+        return false;
+    }
+}
+
 module.exports = {
     LineApiError,
     getBotInfo,
     verifyChatTarget,
     pushTextMessage,
+    replyTextMessage,
+    verifyWebhookSignature,
 };

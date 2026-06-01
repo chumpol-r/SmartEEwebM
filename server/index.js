@@ -37,7 +37,13 @@ if (webpushEnabled) {
 }
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+// Capture the raw body so the LINE webhook can verify HMAC signatures.
+// Stashing it on req only costs memory equal to one request body and keeps
+// the existing JSON-parsed `req.body` ergonomics intact for all routes.
+app.use(express.json({
+    limit: '50mb',
+    verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
 // Health check endpoint (no auth required)
 app.get('/api/health', (req, res) => {
@@ -65,6 +71,7 @@ app.use(async (req, res, next) => {
 
 const { Decrypt, Encrypt, EncryptToken, DecryptToken } = require('./utils/crypto');
 const lineApi = require('./utils/lineApi');
+const smartEeNotify = require('./utils/smartEeNotify');
 
 // Middleware to authenticate token
 function authenticateToken(req, res, next) {
@@ -5254,6 +5261,14 @@ app.get('/api/subscription', authenticateToken, async (req, res) => {
         // display info so the UI can render "Connected to: …".
         const sanitizeDestination = (channel, raw) => {
             if (!raw) return null;
+            // Smart EE: surface only the Group ID — never the encrypted Pin.
+            if (channel === 'smart') {
+                try {
+                    const d = JSON.parse(raw);
+                    // Surface only the Group ID — never the encrypted Pin.
+                    return { groupId: d.gid ?? d.groupId ?? null, verifiedAt: d.verifiedAt || null };
+                } catch { return null; }
+            }
             if (channel !== 'line') return raw;
             try {
                 const d = JSON.parse(raw);
@@ -5395,6 +5410,73 @@ async function prepareLineSubscription(rawDestination) {
     return { destination: JSON.stringify(enriched), summary };
 }
 
+// Smart EE subscription: the user types a Group ID (numeric) + Pin ID (GUID).
+// We do NOT talk to the LINE Messaging API — smarteepro.com's relay already owns
+// the "(gid + pin) -> which LINE group" binding, so there is no chatId/token to
+// store here. We just verify by sending a one-shot test message through the
+// relay; a wrong Group/Pin is rejected by the relay and fails HERE, immediately,
+// instead of silently at first-alert time.
+//
+// Stored destination = { gid, pinCipher } — gid + the Pin encrypted at rest.
+// The Pin is the per-group credential the dispatcher replays to the relay; the
+// shared `pas` API password lives in env (SMARTEE_NOTIFY_PAS), never in a row.
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+async function prepareSmartSubscription(rawDestination) {
+    let parsed;
+    try {
+        parsed = typeof rawDestination === 'string' ? JSON.parse(rawDestination) : rawDestination;
+    } catch {
+        const err = new Error('destination ไม่ใช่ JSON ที่ถูกต้อง');
+        err.status = 400;
+        throw err;
+    }
+    const groupIdRaw = String(parsed?.groupId ?? '').trim();
+    const pinId = String(parsed?.pinId ?? '').trim();
+    if (!groupIdRaw || !pinId) {
+        const err = new Error('ต้องระบุทั้ง Group ID และ Pin ID');
+        err.status = 400;
+        throw err;
+    }
+    // Group ID is the numeric workspace id the admin issued (e.g. 162).
+    const gid = parseInt(groupIdRaw, 10);
+    if (!Number.isInteger(gid) || gid <= 0) {
+        const err = new Error('Group ID ต้องเป็นตัวเลข');
+        err.status = 400;
+        throw err;
+    }
+    // Pin ID must be a GUID.
+    if (!GUID_RE.test(pinId)) {
+        const err = new Error('Pin ID ไม่ถูกต้อง (ต้องเป็นรหัสรูปแบบ UUID)');
+        err.status = 400;
+        throw err;
+    }
+
+    // End-to-end check: actually relay a confirmation to the bound LINE group.
+    try {
+        await smartEeNotify.sendNotify({
+            gid,
+            pin: pinId,
+            message: `✅ Smart EE Notification เชื่อมต่อสำเร็จ`,
+        });
+    } catch (e) {
+        const err = new Error(e.message);
+        err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
+        err.code = e.code || 'test_message_failed';
+        err.hint = e.hint;
+        throw err;
+    }
+
+    // Store gid + the encrypted Pin. Never store the raw Pin or the `pas`.
+    const enriched = {
+        gid,
+        pinCipher: EncryptToken(pinId),
+        verifiedAt: new Date().toISOString(),
+    };
+    const summary = { groupId: gid };
+
+    return { destination: JSON.stringify(enriched), summary };
+}
+
 // Register / confirm a subscription for the current user.
 // Body (all optional): { channel, destination, deviceId, deviceLabel, scope, scopeValue }
 // Defaults to an in-app, all-scope subscription. Idempotent per (user, channel, destination).
@@ -5410,8 +5492,9 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
         } = req.body || {};
         let { destination = null } = req.body || {};
         let lineSummary = null;
+        let smartSummary = null;
 
-        const allowedChannels = ['inapp', 'webpush', 'line', 'sms', 'email', 'desktop', 'ios', 'android'];
+        const allowedChannels = ['inapp', 'webpush', 'line', 'smart', 'sms', 'email', 'desktop', 'ios', 'android'];
         if (!allowedChannels.includes(channel)) {
             return res.status(400).json({ success: false, error: `channel must be one of: ${allowedChannels.join(', ')}` });
         }
@@ -5423,6 +5506,23 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
                 const prepared = await prepareLineSubscription(destination);
                 destination = prepared.destination;
                 lineSummary = prepared.summary;
+            } catch (e) {
+                return res.status(e.status || 400).json({
+                    success: false,
+                    error: e.message,
+                    code: e.code,
+                    hint: e.hint,
+                });
+            }
+        }
+
+        // For Smart EE channel: validate Group ID + Pin ID, encrypt the Pin,
+        // and enrich the destination — before touching the database.
+        if (channel === 'smart') {
+            try {
+                const prepared = await prepareSmartSubscription(destination);
+                destination = prepared.destination;
+                smartSummary = prepared.summary;
             } catch (e) {
                 return res.status(e.status || 400).json({
                     success: false,
@@ -5484,15 +5584,15 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
                         updated_at   = GETDATE()
                     WHERE subscription_id = @subscriptionId
                 `);
-            return res.json({ success: true, subscriptionId, message: 'Subscription updated', line: lineSummary });
+            return res.json({ success: true, subscriptionId, message: 'Subscription updated', line: lineSummary, smart: smartSummary });
         }
 
-        // For LINE channel: seed last_delivered_log_id = current MAX(log_id)
-        // so a brand-new subscriber doesn't get the entire backlog blasted
-        // at them on the first dispatcher tick. NULL stays NULL for other
-        // channels — webpush has its own status-column flow.
+        // For LINE / Smart EE channels: seed last_delivered_log_id = current
+        // MAX(log_id) so a brand-new subscriber doesn't get the entire backlog
+        // blasted at them on the first dispatcher tick. NULL stays NULL for
+        // other channels — webpush has its own status-column flow.
         let seedCursor = null;
-        if (channel === 'line') {
+        if (channel === 'line' || channel === 'smart') {
             try {
                 const maxRow = await req.db.request().query('SELECT ISNULL(MAX(log_id), 0) AS maxId FROM dbo.NotifyLog');
                 seedCursor = maxRow.recordset[0]?.maxId ?? 0;
@@ -5515,7 +5615,7 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
                 VALUES (@userId, @channel, @destination, @deviceId, @deviceLabel, @scope, @scopeValue, 1, GETDATE(), GETDATE(), @seedCursor)
             `);
 
-        res.json({ success: true, subscriptionId: inserted.recordset[0].subscription_id, message: 'Subscribed successfully', line: lineSummary });
+        res.json({ success: true, subscriptionId: inserted.recordset[0].subscription_id, message: 'Subscribed successfully', line: lineSummary, smart: smartSummary });
     } catch (err) {
         console.error('Error saving subscription:', err);
         // Detect the specific SQL Server truncation error so we can guide the
@@ -5552,6 +5652,83 @@ app.delete('/api/subscription/:id', authenticateToken, async (req, res) => {
     } catch (err) {
         console.error('Error unsubscribing:', err);
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// LINE webhook — surfaces chatId (especially groupId) so users can subscribe
+// a group chat instead of getting alerts in their personal LINE.
+//
+// Setup (one-time per bot):
+//   1. LINE Developer Console → Messaging API → Webhook URL
+//      Set to: https://<your-server>/api/line/webhook
+//      Toggle "Use webhook" ON.
+//   2. Add LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN to .env
+//      (signature check is enforced only when LINE_CHANNEL_SECRET is set —
+//       leaving it blank in dev keeps the endpoint open but logs a warning).
+//   3. Invite the bot to a group, then type "/id" in the group chat.
+//      Bot replies with the groupId (starts with 'C') ready to copy/paste
+//      into the Subscribe modal.
+//
+// Events handled:
+//   join     — bot was added to a group/room → auto-reply with chatId
+//   message  — user typed "/id", "id", or "groupid" → reply with chatId
+//   leave    — bot was kicked → logged only (cleanup handled by dispatcher
+//              when next push returns 403/404)
+// ---------------------------------------------------------------------------
+app.post('/api/line/webhook', async (req, res) => {
+    // Respond 200 fast — LINE retries on non-2xx and we want to ack before
+    // any reply round-trip. Real work happens after the response.
+    res.sendStatus(200);
+
+    const channelSecret = process.env.LINE_CHANNEL_SECRET || '';
+    const accessToken   = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+
+    if (channelSecret) {
+        const ok = lineApi.verifyWebhookSignature(
+            channelSecret, req.rawBody, req.headers['x-line-signature']
+        );
+        if (!ok) {
+            console.warn('[line webhook] signature verification failed — request rejected');
+            return;
+        }
+    } else {
+        console.warn('[line webhook] LINE_CHANNEL_SECRET not set — skipping signature check');
+    }
+
+    if (!accessToken) {
+        console.warn('[line webhook] LINE_CHANNEL_ACCESS_TOKEN not set — cannot reply to events');
+        return;
+    }
+
+    const events = Array.isArray(req.body?.events) ? req.body.events : [];
+    for (const ev of events) {
+        const src = ev.source || {};
+        const chatId = src.groupId || src.roomId || src.userId;
+        const chatKind = src.groupId ? 'group' : src.roomId ? 'room' : 'user';
+
+        console.log(`[line webhook] ${ev.type} ${chatKind} chatId=${chatId || '-'}`);
+
+        try {
+            if (ev.type === 'join') {
+                await lineApi.replyTextMessage(accessToken, ev.replyToken,
+                    `🤖 Smart EE Bot พร้อมใช้งานในกลุ่มนี้แล้ว\n` +
+                    `Chat ID: ${chatId}\n\n` +
+                    `คัดลอก Chat ID ด้านบนไปวางในหน้า Subscribe ของระบบ Smart EE ` +
+                    `เพื่อให้แจ้งเตือนเข้ามาที่กลุ่มนี้`);
+            } else if (ev.type === 'message' && ev.message?.type === 'text') {
+                const text = String(ev.message.text || '').trim().toLowerCase();
+                if (text === '/id' || text === 'id' || text === 'groupid' || text === '/groupid') {
+                    await lineApi.replyTextMessage(accessToken, ev.replyToken,
+                        `Chat ID (${chatKind}): ${chatId}\n\n` +
+                        `วาง ID นี้ในหน้า Subscribe ของระบบ Smart EE`);
+                }
+            } else if (ev.type === 'leave') {
+                console.log(`[line webhook] bot left ${chatKind} ${chatId}`);
+            }
+        } catch (err) {
+            console.error(`[line webhook] reply failed for ${ev.type}:`, err.message);
+        }
     }
 });
 
@@ -6143,6 +6320,7 @@ if (process.env.ENABLE_MQTT_WORKER === 'true') {
     const mqttNotifier = require('./workers/mqttNotifier');
     const webpushDispatcher = require('./workers/webpushDispatcher');
     const lineDispatcher = require('./workers/lineDispatcher');
+    const smartLineDispatcher = require('./workers/smartLineDispatcher');
     connectToDb()
         .then(pool => {
             global.dbPool = pool;
@@ -6151,8 +6329,9 @@ if (process.env.ENABLE_MQTT_WORKER === 'true') {
         .then(() => {
             if (webpushEnabled) webpushDispatcher.start();
             else console.warn('[webpush] dispatcher NOT started (VAPID missing)');
-            // LINE dispatcher has no global config to gate — it polls per-subscription.
+            // LINE dispatchers have no global config to gate — they poll per-subscription.
             lineDispatcher.start();
+            smartLineDispatcher.start();
         })
         .catch(err => console.error('[workers] failed to start in-process:', err));
 } else {

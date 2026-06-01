@@ -71,6 +71,11 @@ async function main() {
     const lineDispatcher = require('./workers/lineDispatcher');
     lineDispatcher.start();
 
+    // 5) Smart EE LINE dispatcher (channel='smart'): same cursor/scope flow but
+    //    forwards messages through the smarteepro.com relay (not LINE API direct).
+    const smartLineDispatcher = require('./workers/smartLineDispatcher');
+    smartLineDispatcher.start();
+
     // ---- Graceful shutdown ------------------------------------------------
     // Stop the loops first so they don't write to a closed pool, then close
     // the pool, then exit. SIGINT covers Ctrl+C during dev; SIGTERM is what
@@ -83,6 +88,7 @@ async function main() {
         try {
             if (dispatcher) dispatcher.stop();
             lineDispatcher.stop();
+            smartLineDispatcher.stop();
             await mqttNotifier.stop();
             await pool.close();
         } catch (err) {

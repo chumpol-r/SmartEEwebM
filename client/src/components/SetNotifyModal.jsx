@@ -1,13 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { X } from 'lucide-react';
+import { X, Smartphone, MessageCircle, Sparkles } from 'lucide-react';
 
-// Channels are stored as a CSV in NotifyConfig.alarm_type, e.g. 'device,line'.
-// 'device' = webpush to subscribed devices; 'line' = LINE Messaging.
+// Channels are stored as a CSV in NotifyConfig.alarm_type, e.g. 'device,smart,line'.
+// 'device' = webpush to subscribed devices; 'smart' = Smart EE managed LINE
+// (admin-paired group); 'line' = BYO-bot LINE Messaging.
 // Empty string means "do not notify" — the admin has to opt-in.
+// `active` classes map to the notification tier tokens in index.css
+// (device → --tier-free/blue, smart → --tier-smart/violet, line → --tier-line/green).
 const CHANNEL_OPTIONS = [
-    { value: 'device', label: 'Device' },
-    { value: 'line',   label: 'LINE'   },
+    {
+        value: 'device',
+        label: 'Device',
+        Icon: Smartphone,
+        active: 'bg-blue-600 border-blue-500 text-white shadow-sm shadow-blue-500/30',
+    },
+    {
+        value: 'smart',
+        label: 'Smart EE',
+        Icon: Sparkles,
+        active: 'bg-violet-600 border-violet-500 text-white shadow-sm shadow-violet-500/30',
+    },
+    {
+        value: 'line',
+        label: 'LINE',
+        Icon: MessageCircle,
+        active: 'bg-green-600 border-green-500 text-white shadow-sm shadow-green-500/30',
+    },
 ];
 
 const parseChannels = (csv) =>
@@ -28,19 +47,35 @@ const ChannelPicker = ({ name, value, onChange, disabled }) => {
         onChange({ target: { name, value: toggleChannel(value, ch, checked) } });
     };
     return (
-        <div className={`flex items-center gap-2 ${disabled ? 'opacity-40 pointer-events-none' : ''}`}>
-            {CHANNEL_OPTIONS.map(opt => (
-                <label key={opt.value} className="flex items-center gap-1 text-xs text-slate-200 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={selected.has(opt.value)}
-                        onChange={(e) => fire(opt.value, e.target.checked)}
+        <div
+            role="group"
+            className={`inline-flex items-center gap-1 rounded-lg bg-slate-800/60 p-0.5 ${
+                disabled ? 'opacity-40 pointer-events-none' : ''
+            }`}
+        >
+            {CHANNEL_OPTIONS.map(({ value: ch, label, Icon, active }) => {
+                const isOn = selected.has(ch);
+                return (
+                    <button
+                        key={ch}
+                        type="button"
+                        role="switch"
+                        aria-checked={isOn}
+                        aria-label={label}
+                        title={label}
                         disabled={disabled}
-                        className="accent-blue-500"
-                    />
-                    {opt.label}
-                </label>
-            ))}
+                        onClick={() => fire(ch, !isOn)}
+                        className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                            isOn
+                                ? active
+                                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+                        }`}
+                    >
+                        <Icon size={12} strokeWidth={2.5} />
+                        {label}
+                    </button>
+                );
+            })}
         </div>
     );
 };

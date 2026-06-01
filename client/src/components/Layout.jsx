@@ -324,6 +324,35 @@ const Layout = ({ children }) => {
         }
     };
 
+    // Persist a Smart EE subscription. The backend validates the Group ID +
+    // Pin ID, encrypts the Pin at rest, and only confirms on success — mirroring
+    // the LINE flow. We DO NOT mark the tier active unless the backend confirms.
+    const handleSubscribeSmart = async ({ groupId, pinId }) => {
+        const token = localStorage.getItem('token');
+        try {
+            const res = await axios.post('/api/subscription',
+                {
+                    channel: 'smart',
+                    destination: JSON.stringify({ groupId, pinId }),
+                    scope: 'all',
+                    deviceId: getDeviceId(),
+                    deviceLabel: getDeviceLabel(),
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            // Only promote to 'smart' if LINE (higher tier) isn't already active.
+            setCurrentTier((t) => t === 'line' ? t : 'smart');
+            return res.data; // includes { smart: { groupId } }
+        } catch (err) {
+            const body = err.response?.data;
+            const msg  = body?.error || err.message || 'เชื่อมต่อ Smart EE ไม่สำเร็จ';
+            const hint = body?.hint ? `\n${body.hint}` : '';
+            const wrapped = new Error(`${msg}${hint}`);
+            wrapped.code = body?.code;
+            throw wrapped;
+        }
+    };
+
     // Unified submit handler for the SubscriptionModal. Returns a promise so
     // the modal can show its activating → activated state correctly.
     // Returns whatever the underlying API returned (or undefined for free
@@ -344,19 +373,7 @@ const Layout = ({ children }) => {
         } else if (payload.tier === 'line') {
             return await handleSubscribeLine({ token: payload.token, chatId: payload.chatId });
         } else if (payload.tier === 'smart') {
-            // Smart EE tier — backend wiring TBD; record intent for now.
-            const token = localStorage.getItem('token');
-            await axios.post('/api/subscription',
-                {
-                    channel: 'smart',
-                    destination: JSON.stringify({ enabled: true }),
-                    scope: 'all',
-                    deviceId: getDeviceId(),
-                    deviceLabel: getDeviceLabel(),
-                },
-                { headers: { Authorization: `Bearer ${token}` } }
-            ).catch(() => { /* tolerate until backend lands */ });
-            setCurrentTier((t) => t === 'line' ? t : 'smart');
+            return await handleSubscribeSmart({ groupId: payload.groupId, pinId: payload.pinId });
         }
     };
 

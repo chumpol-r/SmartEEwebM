@@ -39,13 +39,11 @@ const TIERS = [
         id: 'smart',
         name: 'Smart EE Notification',
         price: 'Pro · advanced workspace',
-        badge: 'Most Popular',
+        badge: '',
         Icon: Sparkles,
         accent: 'from-violet-500 to-pink-500',
         ringSelected: 'ring-violet-500/30 border-violet-500',
-        cta: 'Upgrade to Smart EE',
-        disabled: true,
-        disabledReason: 'Coming soon — not yet available',
+        cta: 'Connect Smart EE',
         features: [
             'AI-driven anomaly & trend detection',
             'Custom thresholds per metric & device',
@@ -71,15 +69,6 @@ const TIERS = [
             'Delivery analytics & retry logs',
         ],
     },
-];
-
-const SMART_FEATURES = [
-    { title: 'Anomaly Detection', desc: 'Automatic baselines per device, flagged in real time.' },
-    { title: 'Custom Thresholds', desc: 'Per-metric rules with delay & severity levels.' },
-    { title: 'Smart Digests',     desc: 'Hourly, daily, or weekly summaries to email or in-app.' },
-    { title: 'Multi-Channel',     desc: 'Web push, email, webhook — choose per alert.' },
-    { title: 'Team Routing',      desc: 'Route by role, shift, or on-call schedule.' },
-    { title: 'Audit Log',         desc: 'Full delivery history with retries and acknowledgments.' },
 ];
 
 // ---------- SecretField ----------
@@ -161,6 +150,14 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
     const [chatVisible, setChatVisible] = useState(false);
     const [tokenCopied, setTokenCopied] = useState(false);
     const [chatCopied, setChatCopied] = useState(false);
+    // Smart EE credentials — Group ID identifies the workspace, Pin ID is a
+    // secret pairing code (masked here, encrypted at rest by the backend).
+    const [smartGroupId, setSmartGroupId] = useState('');
+    const [smartPinId, setSmartPinId] = useState('');
+    const [groupVisible, setGroupVisible] = useState(false);
+    const [pinVisible, setPinVisible] = useState(false);
+    const [groupCopied, setGroupCopied] = useState(false);
+    const [pinCopied, setPinCopied] = useState(false);
     // Submission error (e.g. invalid token, bot not in group, LINE API down)
     const [submitError, setSubmitError] = useState(null);
     // On success the backend returns bot/chat identity — we flash it briefly.
@@ -178,6 +175,8 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
             // Security: auto-hide secrets when modal closes
             setTokenVisible(false);
             setChatVisible(false);
+            setGroupVisible(false);
+            setPinVisible(false);
         }
     }, [open, currentTier]);
 
@@ -201,8 +200,9 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
         if (submitting || done) return true;
         if (selectedTier?.disabled) return true;
         if (selected === 'line' && (!lineToken.trim() || !lineChatId.trim())) return true;
+        if (selected === 'smart' && (!smartGroupId.trim() || !smartPinId.trim())) return true;
         return false;
-    }, [submitting, done, selected, selectedTier, lineToken, lineChatId]);
+    }, [submitting, done, selected, selectedTier, lineToken, lineChatId, smartGroupId, smartPinId]);
 
     const handleCopy = async (val, setCopied) => {
         try {
@@ -220,15 +220,19 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
             const payload =
                 selected === 'line'
                     ? { tier: 'line', token: lineToken.trim(), chatId: lineChatId.trim() }
-                    : selected === 'free'
-                        ? { tier: 'free', action: webPushSubscribed ? 'unsubscribe' : 'subscribe' }
-                        : { tier: selected };
+                    : selected === 'smart'
+                        ? { tier: 'smart', groupId: smartGroupId.trim(), pinId: smartPinId.trim() }
+                        : selected === 'free'
+                            ? { tier: 'free', action: webPushSubscribed ? 'unsubscribe' : 'subscribe' }
+                            : { tier: selected };
             const result = await onSubmit?.(payload);
-            // Backend returns { line: { bot, chat } } on success — show it briefly
-            if (result?.line) setSubmitSummary(result.line);
+            // Backend returns { line: { bot, chat } } or { smart: { groupId } }
+            // on success — show it briefly.
+            const summary = result?.line || result?.smart;
+            if (summary) setSubmitSummary(summary);
             setDone(true);
             // Give the user a touch longer when there's a summary to read
-            setTimeout(() => { onClose?.(); }, result?.line ? 1800 : 1100);
+            setTimeout(() => { onClose?.(); }, summary ? 1800 : 1100);
         } catch (err) {
             console.error('Subscription submit failed:', err);
             setSubmitError(err?.message || 'การเชื่อมต่อล้มเหลว');
@@ -330,11 +334,11 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                                             Current
                                         </span>
                                     )}
-                                    {t.disabled && !isCurrent && (
+                                    {/* {t.disabled && !isCurrent && (
                                         <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-amber-500/15 border border-amber-500/40 text-amber-300">
                                             Coming soon
                                         </span>
-                                    )}
+                                    )} */}
 
                                     {/* Icon tile */}
                                     <div className={cn(
@@ -406,33 +410,77 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                         )}
 
                         {selected === 'smart' && (
-                            <div>
-                                <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/5 border border-amber-500/30 mb-4">
-                                    <div className="w-9 h-9 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
-                                        <Info size={18} className="text-amber-300" />
+                            <div className="space-y-4">
+                                <div className="flex items-start gap-3 p-4 rounded-xl bg-violet-500/5 border border-violet-500/30">
+                                    <div className="w-9 h-9 rounded-lg bg-violet-500/15 border border-violet-500/30 flex items-center justify-center shrink-0">
+                                        <Sparkles size={18} className="text-violet-300" />
                                     </div>
                                     <div>
-                                        <h4 className="text-sm font-semibold text-white">Coming soon</h4>
+                                        <h4 className="text-sm font-semibold text-white">Smart EE Credentials</h4>
                                         <p className="mt-1 text-sm text-slate-300">
-                                            Smart EE Notification is not yet available. You can preview the included capabilities below — activation will open once the service is released.
+                                            Connect your Smart EE workspace by entering its Group ID and the Pin ID issued for this device. Your Pin is encrypted at rest and never exposed in logs.
                                         </p>
                                     </div>
                                 </div>
-                                <h4 className="text-sm font-semibold text-white mb-3">What's included</h4>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    {SMART_FEATURES.map((f) => (
-                                        <div
-                                            key={f.title}
-                                            className="flex items-start gap-3 p-4 rounded-xl bg-slate-800/60 border border-slate-700 hover:border-violet-500/50 transition-colors"
-                                        >
-                                            <CheckCircle2 size={18} className="text-violet-400 mt-0.5 shrink-0" />
-                                            <div>
-                                                <div className="text-sm font-medium text-white">{f.title}</div>
-                                                <div className="text-xs text-slate-400 mt-0.5">{f.desc}</div>
-                                            </div>
-                                        </div>
-                                    ))}
+
+                                <div className="space-y-4">
+                                    <div>
+                                        <SecretField
+                                            id="smart-groupid"
+                                            label="Group ID"
+                                            hint="Your Smart EE workspace / group identifier"
+                                            value={smartGroupId}
+                                            onChange={setSmartGroupId}
+                                            visible={groupVisible}
+                                            onToggle={() => setGroupVisible(v => !v)}
+                                            onCopy={() => handleCopy(smartGroupId, setGroupCopied)}
+                                            copied={groupCopied}
+                                            placeholder="e.g. 162"
+                                        />
+                                    </div>
+                                    <div>
+                                        <SecretField
+                                            id="smart-pinid"
+                                            label="Pin ID"
+                                            hint="The pairing PIN issued for this workspace — treat it like a password"
+                                            value={smartPinId}
+                                            onChange={setSmartPinId}
+                                            visible={pinVisible}
+                                            onToggle={() => setPinVisible(v => !v)}
+                                            onCopy={() => handleCopy(smartPinId, setPinCopied)}
+                                            copied={pinCopied}
+                                            placeholder="Enter the device Pin ID"
+                                        />
+                                    </div>
                                 </div>
+
+                                <div className="flex items-start gap-2 p-3 rounded-lg bg-slate-800/60 border border-slate-700">
+                                    <Info size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                                    <p className="text-xs text-slate-400">
+                                        Your Pin is masked by default and encrypted before it is stored. Toggle visibility only when verifying — your inputs auto-hide when you leave this dialog.
+                                    </p>
+                                </div>
+
+                                {/* Submission error (invalid group/pin, Smart EE unreachable, etc.) */}
+                                {submitError && (
+                                    <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/10 border border-rose-500/40">
+                                        <X size={14} className="text-rose-300 mt-0.5 shrink-0" />
+                                        <div className="text-xs text-rose-200 whitespace-pre-line">
+                                            {submitError}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Success summary — backend confirmed the workspace */}
+                                {submitSummary?.groupId && (
+                                    <div className="flex items-center gap-2.5 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/40">
+                                        <CheckCircle2 size={18} className="text-emerald-300 shrink-0" />
+                                        <div className="leading-tight">
+                                            <div className="text-sm font-semibold text-white">Smart EE Notification</div>
+                                            <div className="text-xs text-emerald-200/90">เชื่อมต่อสำเร็จ</div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 
