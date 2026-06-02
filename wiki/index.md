@@ -3,7 +3,7 @@
 สารบัญทุกหน้าในวิกิ. LLM อ่านไฟล์นี้ก่อนเสมอเวลาตอบคำถาม เพื่อหาหน้าที่เกี่ยวข้องแล้วค่อย drill เข้าไป.
 กติกาการดูแลวิกิอยู่ใน [WIKI.md](WIKI.md).
 
-_อัปเดตล่าสุด: 2026-06-01_
+_อัปเดตล่าสุด: 2026-06-02_
 
 ## 👋 เริ่มที่นี่
 - [HOW-TO-USE](HOW-TO-USE.md) — **คู่มือใช้งานฉบับเข้าใจง่าย + คลังตัวอย่าง prompt** (อ่านก่อนถ้าเพิ่งเริ่ม/เพิ่งเข้าทีม).
@@ -11,7 +11,7 @@ _อัปเดตล่าสุด: 2026-06-01_
 ## Architecture
 - [overview](architecture/overview.md) — ภาพรวม 3 ส่วน (client / API / worker) + DB + deployment.
 - [auth-and-permissions](architecture/auth-and-permissions.md) — custom token (ไม่ใช่ JWT) + ระบบสิทธิ์ Group/Site/Super Group.
-- [realtime-and-notifications](architecture/realtime-and-notifications.md) — REST realtime จาก DB + MQTT→NotifyLog→push (web/LINE/smart) + channel `smart` (relay smarteepro.com) + UI เลือก channel (`ChannelPicker`) + convention สี tier.
+- [realtime-and-notifications](architecture/realtime-and-notifications.md) — REST realtime จาก DB + MQTT→NotifyLog→push (web/LINE/smart) + channel `smart` (relay smarteepro.com) + UI เลือก channel (`ChannelPicker`) + convention สี tier + **Subscription UI** (`SubscriptionModal`: per-channel status, Connected read-only, แยก Connect/Test, `POST /api/subscription/:id/test`) + **share engine ข้ามหน้าด้วย `SubscriptionContext`** (logic อยู่ที่ `Layout`; `SubscriptionModalV2` = design variant ใช้ใน `NotifyConfig`).
 
 ## Database
 - [schema-and-conventions](db/schema-and-conventions.md) — SQL Server, naming convention (`c_/n_/u_/dt_`), ลำดับชั้น Group→Site→Serial, ตารางหลัก.

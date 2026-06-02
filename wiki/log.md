@@ -40,3 +40,37 @@
   (destination `{gid,pinCipher}`); ไม่มีตาราง pairing.
 โค้ดจริง: `server/utils/smartEeNotify.js`, `server/workers/smartLineDispatcher.js`,
 `prepareSmartSubscription`/sanitize ใน `server/index.js`, `SubscriptionModal.jsx`, `SetNotifyModal.jsx`.
+
+## [2026-06-02] ingest | Subscription UI + แยก Connect/Test (quota-aware)
+ปรับ `SubscriptionModal` ให้แสดงสถานะ **per-channel** + แยกการ "ยิงข้อความทดสอบ" ออกจาก "connect"
+เพื่อไม่ให้ connect กิน push-message quota ของ LINE. หน้าที่แตะ:
+- **architecture/realtime-and-notifications** — เพิ่มหัวข้อ "Subscription UI" (`channelStatus` ใน
+  `Layout.jsx`, `ConnectedSummary` read-only + warning เปลี่ยนกลุ่ม, ปุ่ม Send test สี amber→orange +
+  `ConfirmDialog` + cooldown 5 วิ, endpoint `POST /api/subscription/:id/test`); แก้ flow `smart` connect
+  (ไม่ยิงข้อความแล้ว) + callout CONTRADICTION; อัปเดต sources.
+- **decisions/003-smart-ee-notification-relay** — เพิ่ม UPDATE callout: connect ของ smart/line ไม่ยิง
+  ข้อความแล้ว, verify ย้ายไปปุ่ม test.
+การเปลี่ยน semantics สำคัญ: `prepareLineSubscription` ตัด `pushTextMessage` (verify ด้วย GET เท่านั้น),
+`prepareSmartSubscription` เก็บ `verifiedAt: null` ไม่ verify ตอน connect; endpoint test reuse
+`DecryptToken`/`lineApi.pushTextMessage`/`smartEeNotify.sendNotify` + cooldown in-memory + stamp `verifiedAt`.
+โค้ดจริง: `server/index.js:5324` (prepareLine), `:5411` (prepareSmart), `:5640` (test endpoint),
+`client/src/components/SubscriptionModal.jsx`, `SubscribeButton.jsx`, `Layout.jsx:141`.
+
+## [2026-06-02] ingest | ข้อความ test แยกตาม channel
+ปรับ test message ใน `POST /api/subscription/:id/test` ให้แยกตาม channel (`server/index.js:5689`):
+`✅ LINE Bot Notification Connected` / `✅ Smart EE Notification Connected` + บรรทัดยืนยันว่าเป็น
+ข้อความทดสอบ. แตะ **architecture/realtime-and-notifications** (หัวข้อ Subscription UI → bullet
+endpoint test). หมายเหตุ: newline จริงของ smart ถูก `smartEeNotify` แปลงเป็น literal `\n`.
+
+## [2026-06-02] ingest | share subscription engine ข้ามหน้า (SubscriptionContext + ModalV2)
+เพิ่มปุ่ม "Notification Channels" ในหน้า `NotifyConfig` ที่เปิด modal สมัครแจ้งเตือนของตัวเอง โดย
+**ไม่ duplicate logic** และ **ไม่เกิด state drift**. โครงสร้าง:
+- **`client/src/contexts/SubscriptionContext.jsx`** (ใหม่) — `useSubscription()` แชร์ engine
+  `{ currentTier, webPushSubscribed, channelStatus, onSubmit, onSendTest }` ที่ logic ยังอยู่ใน `Layout.jsx`.
+- **`Layout.jsx`** ครอบ tree ด้วย `<SubscriptionContext.Provider>` (handler/state เดิมไม่ย้าย).
+- **`SubscriptionModalV2.jsx`** (ใหม่) — design variant ของ `SubscriptionModal`, behavior เหมือนเป๊ะ
+  (form-state/flow คัดลอกตรง), ปรับแค่ shell/header/footer.
+- **`NotifyConfig.jsx`** — ปุ่มที่ header + render V2 ด้วย local open state, ดึง props จาก `useSubscription()`.
+แตะวิกิ: **architecture/realtime-and-notifications** (หัวข้อใหม่ "แชร์ subscription engine ข้ามหน้า"
++ sources) และ **index.md**. ตรวจด้วย `npm run build` (ผ่าน); `npm run lint` ของ repo พังอยู่ก่อนแล้ว
+(ESLint v9 ไม่มี `eslint.config.js` — ไม่เกี่ยวงานนี้).

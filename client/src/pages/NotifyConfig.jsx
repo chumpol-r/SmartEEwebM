@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Search, Edit2, Trash2, X, Save, RefreshCw, Bell, Loader2, Plus } from 'lucide-react';
+import { Search, Edit2, Trash2, X, Save, RefreshCw, Bell, BellRing, Loader2, Plus } from 'lucide-react';
 import { useToast } from '../components/Toast';
+import { useSubscription } from '../contexts/SubscriptionContext.jsx';
+import SubscriptionModalV2 from '../components/SubscriptionModalV2.jsx';
 
 // ALARM_TYPES dropdown removed from this modal — value is preserved in payload
 // and edited via SetNotifyModal. Backend has its own NC_VALID_ALARM_TYPES whitelist.
@@ -67,6 +69,10 @@ function validateMonotonic(rows) {
 
 const NotifyConfig = () => {
     const toast = useToast();
+    // Subscription engine (status + handlers) shared from Layout via context.
+    // Lets this page open its own modal variant without re-wiring Web Push/LINE/Smart EE.
+    const subscription = useSubscription();
+    const [subModalOpen, setSubModalOpen] = useState(false);
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
@@ -318,13 +324,22 @@ const NotifyConfig = () => {
                     </h1>
                     <p className="text-slate-400">จัดการการแจ้งเตือนของแต่ละ Serial ({groups.length} serials)</p>
                 </div>
-                <button
-                    onClick={() => fetchAll(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-                >
-                    <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-                    <span>Refresh</span>
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setSubModalOpen(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 via-violet-600 to-pink-600 hover:opacity-90 text-white rounded-lg transition-opacity shadow-lg shadow-violet-900/30"
+                    >
+                        <BellRing size={18} />
+                        <span>Notification Channels</span>
+                    </button>
+                    <button
+                        onClick={() => fetchAll(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                    >
+                        <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                        <span>Refresh</span>
+                    </button>
+                </div>
             </div>
 
             {/* Search */}
@@ -605,6 +620,18 @@ const NotifyConfig = () => {
                     </div>
                 </div>
             )}
+
+            {/* Subscription modal (design variant). Logic is shared from Layout
+                via SubscriptionContext, so this stays in sync with the header button. */}
+            <SubscriptionModalV2
+                open={subModalOpen}
+                onClose={() => setSubModalOpen(false)}
+                currentTier={subscription.currentTier}
+                webPushSubscribed={subscription.webPushSubscribed}
+                channelStatus={subscription.channelStatus}
+                onSubmit={subscription.onSubmit}
+                onSendTest={subscription.onSendTest}
+            />
         </div>
     );
 };

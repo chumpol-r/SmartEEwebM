@@ -6,6 +6,7 @@ import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import SubscribeButton from './SubscribeButton.jsx';
 import SubscriptionModal from './SubscriptionModal.jsx';
+import SubscriptionContext from '../contexts/SubscriptionContext.jsx';
 
 // Utility for tailwind classes
 function cn(...inputs) {
@@ -452,7 +453,18 @@ const Layout = ({ children }) => {
 
     const isCustomView = location.pathname === '/custom-view';
 
+    // Expose the subscription engine to descendant pages (e.g. NotifyConfig) so
+    // they can open their own modal variant without re-implementing the wiring.
+    const subscriptionContextValue = {
+        currentTier,
+        webPushSubscribed: isSubscribed,
+        channelStatus,
+        onSubmit: handleModalSubmit,
+        onSendTest: handleSendTest,
+    };
+
     return (
+        <SubscriptionContext.Provider value={subscriptionContextValue}>
         <div className="flex min-h-screen bg-slate-900 text-white font-sans">
 
             {/* Keyframes for the Subscribe button animations */}
@@ -726,6 +738,7 @@ const Layout = ({ children }) => {
                 onSendTest={handleSendTest}
             />
         </div >
+        </SubscriptionContext.Provider>
     );
 };
 

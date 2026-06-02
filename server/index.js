@@ -5686,9 +5686,11 @@ app.post('/api/subscription/:id/test', authenticateToken, async (req, res) => {
         // Mark the cooldown BEFORE sending so a failure still throttles retries.
         _testCooldown.set(id, Date.now());
 
-        const testMessage =
-            '🔔 Smart EE test notification\n' +
-            'If you can read this, your notifications are set up correctly.';
+        // Per-channel confirmation text. Real newlines are fine for LINE push;
+        // smartEeNotify flattens them to the literal "\n" the relay requires.
+        const testMessage = channel === 'line'
+            ? '✅ LINE Bot Notification Connected\nThis is a test message — your notifications are working.'
+            : '✅ Smart EE Notification Connected\nThis is a test message — your notifications are working.';
 
         try {
             if (channel === 'line') {

@@ -1,7 +1,7 @@
 ---
 title: Realtime & Notifications
 tags: [architecture, realtime, mqtt, notification, worker]
-updated: 2026-06-01
+updated: 2026-06-02
 sources:
   - server/worker.js
   - server/workers/mqttNotifier.js
@@ -10,10 +10,19 @@ sources:
   - server/workers/lineDispatcher.js
   - server/workers/smartLineDispatcher.js
   - server/utils/smartEeNotify.js
+  - server/utils/lineApi.js
   - client/src/contexts/MQTTContext.jsx
   - client/src/components/SetNotifyModal.jsx
+  - client/src/components/SubscriptionModal.jsx
+  - client/src/components/SubscriptionModalV2.jsx
+  - client/src/components/SubscribeButton.jsx
+  - client/src/contexts/SubscriptionContext.jsx
+  - client/src/pages/NotifyConfig.jsx
+  - client/src/components/Layout.jsx:141
   - client/src/index.css:90
   - server/index.js:1018
+  - server/index.js:5247
+  - server/index.js:5640
 ---
 
 # Realtime & Notifications
@@ -94,10 +103,17 @@ POST {SMARTEE_NOTIFY_URL}            (multipart/form-data)
 env: `SMARTEE_NOTIFY_URL` (default `https://smarteepro.com/notify/v4/api/linebot`),
 `SMARTEE_NOTIFY_PAS` (ต้องตั้ง — ไม่ตั้ง dispatcher จะข้าม).
 
-Flow ตอน subscribe (`prepareSmartSubscription`, `server/index.js`): validate gid (เลข) + pin
-(GUID) → **ยิงข้อความทดสอบผ่าน relay** → relay ปฏิเสธ (gid/pin ผิด) = 400 ทันที (ไม่ fail เงียบ) →
-สำเร็จค่อยบันทึก subscription (`channel='smart'`, destination = `{ gid, pinCipher }`).
-dispatcher ถอดรหัส pin ต่อ tick แล้ว replay เข้า relay; 4xx จาก relay = ปิด subscription (is_active=0).
+Flow ตอน subscribe (`prepareSmartSubscription`, `server/index.js:5411`): validate **format**
+ของ gid (เลข) + pin (GUID) → บันทึก subscription ทันที (`channel='smart'`,
+destination = `{ gid, pinCipher, verifiedAt: null }`). **ไม่ยิงข้อความตอน connect** —
+relay ไม่มี endpoint validate แบบไม่ส่ง การ verify จริงจึงเลื่อนไปที่ปุ่ม "Send test" (ดู
+[[003-smart-ee-notification-relay]] + หัวข้อ "Subscription UI" ด้านล่าง). dispatcher ถอดรหัส
+pin ต่อ tick แล้ว replay เข้า relay; 4xx จาก relay = ปิด subscription (is_active=0).
+
+> ⚠️ CONTRADICTION (2026-06-02): เดิม connect ของ smart "ยิงข้อความทดสอบผ่าน relay" เพื่อ
+> verify gid/pin แล้ว fail 400 ทันทีถ้าผิด. ตอนนี้ **ตัดออกแล้ว** เพื่อไม่ให้ connect กินโควต้า LINE —
+> gid/pin ที่ผิดจะ surface ตอนกด Send test หรือตอน dispatch จริง (dispatcher self-deactivate บน 4xx)
+> แทน. ฝั่ง `line` ก็เลิกยิงข้อความตอน connect เช่นกัน (verify ด้วย GET ที่ไม่กินโควต้า).
 
 > **ทำไมใช้ `UserNotificationSubscription` ตรง ๆ ได้ (ไม่ต้องมีตาราง pairing):** เพราะ relay
 > เป็นเจ้าของ binding `gid+pin → LINE group` อยู่แล้ว — ไม่มี chatId/token ที่ admin ต้องผูกฝั่งเรา
@@ -126,6 +142,64 @@ dispatcher ถอดรหัส pin ต่อ tick แล้ว replay เข�
 > เวลาเพิ่ม UI ใด ๆ ที่อ้างถึง channel/tier ให้ reuse token ชุดนี้ (อย่า hardcode สีใหม่)
 > เพื่อให้สื่อความหมาย channel สอดคล้องกันทั้งแอป. ถ้าเพิ่ม channel ใหม่ ต้องเพิ่มทั้ง
 > `CHANNEL_OPTIONS` (ฝั่ง modal) และ token สีใน `index.css`.
+
+## Subscription UI — สมัคร/จัดการ channel (`SubscriptionModal`)
+
+UI สมัครแจ้งเตือนอยู่ใน `client/src/components/SubscriptionModal.jsx` (เปิดจาก `SubscribeButton`
+บน `Layout.jsx`). มี 3 การ์ด tier: `free` (Web Push), `smart` (Smart EE), `line` (LINE Bot).
+
+**สถานะ per-channel (`channelStatus`)** — `Layout.jsx:141` เก็บ map ต่อ channel
+`{ subscribed, subscriptionId, info }` โดย build จาก `GET /api/subscription`
+(`server/index.js:5247`, sanitize destination แล้ว). `free` ผูกกับ **device นี้** (match `deviceId`),
+ส่วน `smart`/`line` เป็นระดับ **account**. `refreshSubscriptions()` re-fetch หลังทุก mutation
+เพื่อไม่ให้ state drift. `currentTier` (สำหรับสีปุ่ม `SubscribeButton`) เป็น derived: line > smart > free.
+
+**Connected = read-only (ไม่มี reconnect/disconnect ในนี้)** — เมื่อ `smart`/`line` เชื่อมแล้ว
+modal โชว์ `ConnectedSummary` (locked) แสดง destination ที่ sanitize (Group ID / Bot→Group)
++ `verifiedAt` + กล่อง **warning amber**: "การเปลี่ยนห้อง/กลุ่มอาจมีค่าใช้จ่าย ให้ติดต่อเจ้าหน้าที่"
+จงใจ **ไม่มีปุ่มแก้/ตัดการเชื่อมต่อ** — ต้องไปทำกับเจ้าหน้าที่.
+
+**แยก Connect ออกจาก Test (quota-aware)** — ดูเหตุผลเต็มใน [[003-smart-ee-notification-relay]]:
+- **Connect ไม่กินโควต้า**: `line` verify ด้วย GET (`getBotInfo`+`verifyChatTarget`, `server/utils/lineApi.js`),
+  `smart` validate format อย่างเดียว.
+- **ปุ่ม "Send test notification"** (footer, สี **amber→orange**) → เปิด `ConfirmDialog` ซ้อน
+  เตือนว่ากิน **push-message quota** ของ LINE → ยืนยันค่อยยิง → มี **cooldown 5 วิ แบบ countdown**
+  (mirror กับ server). โชว์ปุ่มเมื่อ channel เชื่อมแล้ว (locked) หรือเพิ่ง connect สำเร็จ.
+
+**`POST /api/subscription/:id/test`** (`server/index.js:5640`) — ยิงข้อความทดสอบ 1 ครั้ง:
+- เช็ค ownership (`user_id`) + active; `line` → `DecryptToken(tokenCipher)` → `pushTextMessage`;
+  `smart` → `DecryptToken(pinCipher)` → `smartEeNotify.sendNotify` (reuse util ชุดเดียวกับ dispatcher).
+- ข้อความ **แยกตาม channel** (`server/index.js:5689`): `✅ LINE Bot Notification Connected` /
+  `✅ Smart EE Notification Connected` + บรรทัดยืนยันว่าเป็นข้อความทดสอบ (newline จริงของ smart
+  ถูก `smartEeNotify` แปลงเป็น literal `\n` ให้ — ดู [[gotchas]]).
+- **cooldown ฝั่ง server 5 วิ/subscription** (in-memory Map, mark ก่อนส่ง — fail ก็ยัง throttle) คืน
+  429 + `retryAfter`. สำเร็จ → stamp `verifiedAt` ลง destination → badge "Verified".
+
+### แชร์ subscription engine ข้ามหน้า (`SubscriptionContext`)
+
+`SubscriptionModal` (และ `SubscriptionModalV2`) เป็น **presentational ล้วน** — ถือแค่ state ของฟอร์ม
+(ค่าที่พิมพ์/visibility/cooldown). **ตรรกะจริงทั้งหมดอยู่ใน `Layout.jsx`** ไม่ใช่ในตัว modal:
+`channelStatus` + `refreshSubscriptions()`, `handleSubscribe`/`handleUnsubscribe` (Web Push:
+permission+SW+VAPID), `handleSubscribeLine`/`handleSubscribeSmart`, `handleSendTest`,
+`handleModalSubmit` (`onSubmit` รวม), `getDeviceId`, `currentTier`. modal รับทุกอย่างผ่าน props.
+
+เพื่อให้หน้าอื่น (เช่น `NotifyConfig`) เปิด modal สมัครได้เองโดย **ไม่ duplicate logic 250+ บรรทัดนั้น**
+และ **ไม่เกิด state drift** (โดยเฉพาะ Web Push ที่ผูก device นี้ — ถ้ามี state ชุดที่สองจะโชว์ subscribed
+ไม่ตรงกัน) จึงมี `client/src/contexts/SubscriptionContext.jsx`:
+
+- `Layout.jsx` ครอบ tree ด้วย `<SubscriptionContext.Provider>` ส่ง value
+  `{ currentTier, webPushSubscribed, channelStatus, onSubmit, onSendTest }` (engine เดิม — logic ไม่ย้าย).
+- หน้าใดที่อยู่ใน `<Layout>` (ทุก `ProtectedRoute` ผ่าน `App.jsx` → `<Layout>{children}`) เรียก
+  `useSubscription()` ดึง props ชุดเดียวกัน แล้ว render modal ของตัวเองด้วย **local open state**.
+- `useSubscription()` **throw ถ้าถูกใช้นอก Provider** (fail ชัด ไม่ใช่ undefined เงียบ ๆ).
+
+**`SubscriptionModalV2.jsx`** = design variant ของ `SubscriptionModal` — **behavior เหมือนกันเป๊ะ**
+(form-state/handlers/flow คัดลอกตรง) ต่างแค่ shell/header/footer (icon-tile gradient, `rounded-3xl`).
+ใช้ใน `NotifyConfig.jsx` ผ่านปุ่ม **"Notification Channels"** ที่ header. การ subscribe จากปุ่มนี้กับจาก
+`SubscribeButton` บน header อ่าน/เขียน `channelStatus` ก้อนเดียวกัน → sync เสมอ.
+
+> ถ้าจะปรับ flow การ subscribe (เพิ่ม channel, เปลี่ยน payload) ให้แก้ที่ handler ใน `Layout.jsx`
+> ที่เดียว — modal ทุกตัว (V1/V2) ได้ผลตามอัตโนมัติ. ส่วน design แก้แยกในไฟล์ modal นั้น ๆ ได้อิสระ.
 
 ## ลำดับการบูต worker (`server/worker.js:50`)
 1. เปิด DB pool → `global.dbPool`.
