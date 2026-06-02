@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Activity, FileText, Settings, LogOut, Menu, X, BarChart2, DollarSign, PieChart, User, Shield, Monitor, Zap, PencilRuler, Leaf, Eye, ChevronDown, ChevronRight, Search, Bell, BellRing, BellOff, CheckCircle2, Loader2, ClipboardList } from 'lucide-react';
@@ -148,35 +148,53 @@ const Layout = ({ children }) => {
     const [subModalOpen, setSubModalOpen] = useState(false);
     // Highest active tier across all device subscriptions (line > smart > free > null)
     const [currentTier, setCurrentTier] = useState(null);
+    // Per-channel subscription status for the modal. Web Push (`free`) is scoped
+    // to THIS device; `smart`/`line` are account-wide. `info` carries the
+    // sanitized destination the backend returns (groupId / bot+chat), used to
+    // render the "Connected to …" summary and to disable re-connecting.
+    const [channelStatus, setChannelStatus] = useState({
+        free:  { subscribed: false, subscriptionId: null, info: null },
+        smart: { subscribed: false, subscriptionId: null, info: null },
+        line:  { subscribed: false, subscriptionId: null, info: null },
+    });
+
+    // Fetch + rebuild all subscription state from the server. Reused on mount
+    // and after every mutation so `channelStatus`/`currentTier` never drift.
+    const refreshSubscriptions = useCallback(async ({ nudge = false } = {}) => {
+        try {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const res = await axios.get('/api/subscription', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            // Web Push reflects THIS device only (match on our device_id), so the
+            // button doesn't show "subscribed" because of another device.
+            const myDeviceId = getDeviceId();
+            const all = res.data?.data || [];
+            const mine     = all.find(s => s.channel === 'webpush' && s.deviceId === myDeviceId);
+            const smartSub = all.find(s => s.channel === 'smart');
+            const lineSub  = all.find(s => s.channel === 'line');
+
+            setIsSubscribed(!!mine);
+            setSubscriptionId(mine?.subscriptionId ?? null);
+            setChannelStatus({
+                free:  { subscribed: !!mine,     subscriptionId: mine?.subscriptionId ?? null,     info: null },
+                smart: { subscribed: !!smartSub, subscriptionId: smartSub?.subscriptionId ?? null, info: smartSub?.destination ?? null },
+                line:  { subscribed: !!lineSub,  subscriptionId: lineSub?.subscriptionId ?? null,  info: lineSub?.destination ?? null },
+            });
+            // Resolve highest tier across user's subscriptions (line > smart > free)
+            setCurrentTier(lineSub ? 'line' : smartSub ? 'smart' : mine ? 'free' : null);
+            // Only nudge users who haven't subscribed on this device yet
+            if (nudge && !mine) setShowSubHint(true);
+        } catch (error) {
+            console.error('Error checking subscription:', error);
+        }
+    }, []);
 
     // Check current subscription status on mount
     useEffect(() => {
-        const checkSubscription = async () => {
-            try {
-                const token = localStorage.getItem('token');
-                if (!token) return;
-                const res = await axios.get('/api/subscription', {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                // Reflect the status of THIS device only (match on our device_id),
-                // so the button doesn't show "subscribed" because of another device.
-                const myDeviceId = getDeviceId();
-                const all = res.data?.data || [];
-                const mine = all.find(s => s.channel === 'webpush' && s.deviceId === myDeviceId);
-                setIsSubscribed(!!mine);
-                setSubscriptionId(mine?.subscriptionId ?? null);
-                // Resolve highest tier across user's subscriptions
-                const hasLine  = all.some(s => s.channel === 'line');
-                const hasSmart = all.some(s => s.channel === 'smart');
-                setCurrentTier(hasLine ? 'line' : hasSmart ? 'smart' : mine ? 'free' : null);
-                // Only nudge users who haven't subscribed on this device yet
-                if (!mine) setShowSubHint(true);
-            } catch (error) {
-                console.error('Error checking subscription:', error);
-            }
-        };
-        checkSubscription();
-    }, []);
+        refreshSubscriptions({ nudge: true });
+    }, [refreshSubscriptions]);
 
     // Auto-hide the hint banner a few seconds after it appears
     useEffect(() => {
@@ -316,6 +334,7 @@ const Layout = ({ children }) => {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             setCurrentTier('line');
+            refreshSubscriptions(); // sync channelStatus (info/subscriptionId) from server
             return res.data; // includes { line: { bot, chat } }
         } catch (err) {
             // Re-throw a friendly Error so the modal's catch handler can show
@@ -347,6 +366,7 @@ const Layout = ({ children }) => {
             );
             // Only promote to 'smart' if LINE (higher tier) isn't already active.
             setCurrentTier((t) => t === 'line' ? t : 'smart');
+            refreshSubscriptions(); // sync channelStatus (info/subscriptionId) from server
             return res.data; // includes { smart: { groupId } }
         } catch (err) {
             const body = err.response?.data;
@@ -354,6 +374,27 @@ const Layout = ({ children }) => {
             const hint = body?.hint ? `\n${body.hint}` : '';
             const wrapped = new Error(`${msg}${hint}`);
             wrapped.code = body?.code;
+            throw wrapped;
+        }
+    };
+
+    // Send a one-shot test notification for a just-connected smart/line
+    // subscription. Explicit + quota-spending, so the modal confirms first.
+    // Re-syncs channelStatus afterwards to pick up the new `verifiedAt`.
+    const handleSendTest = async (subscriptionId) => {
+        const token = localStorage.getItem('token');
+        try {
+            const res = await axios.post(`/api/subscription/${subscriptionId}/test`, {}, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            refreshSubscriptions();
+            return res.data;
+        } catch (err) {
+            const body = err.response?.data;
+            const msg  = body?.error || err.message || 'Failed to send test notification.';
+            const wrapped = new Error(msg);
+            wrapped.code = body?.code;
+            wrapped.retryAfter = body?.retryAfter;
             throw wrapped;
         }
     };
@@ -680,7 +721,9 @@ const Layout = ({ children }) => {
                 onClose={() => setSubModalOpen(false)}
                 currentTier={currentTier}
                 webPushSubscribed={isSubscribed}
+                channelStatus={channelStatus}
                 onSubmit={handleModalSubmit}
+                onSendTest={handleSendTest}
             />
         </div >
     );

@@ -5313,9 +5313,11 @@ app.get('/api/subscription', authenticateToken, async (req, res) => {
     }
 });
 
-// Prepare a LINE channel registration: verify the token + chat, enrich with
-// bot/group identity, encrypt the token at rest, and send a one-shot test
-// message so the user sees the connection works immediately.
+// Prepare a LINE channel registration: verify the token + chat (read-only
+// calls that DON'T consume the LINE push-message quota), enrich with bot/group
+// identity, and encrypt the token at rest. We deliberately DO NOT send a test
+// message here — that's an explicit, opt-in action via
+// `POST /api/subscription/:id/test` so connecting never silently spends quota.
 //
 // Returns the serialized `destination` JSON to store, plus a `summary` object
 // to return to the frontend for display.
@@ -5360,26 +5362,7 @@ async function prepareLineSubscription(rawDestination) {
         throw err;
     }
 
-    // 3) Send a friendly confirmation message — also acts as the final
-    //    end-to-end check (the previous two only validate read access).
-    try {
-        await lineApi.pushTextMessage(
-            token,
-            chatId,
-            `✅ Smart EE เชื่อมต่อ LINE สำเร็จ\n` +
-            `Bot: ${bot.displayName || bot.basicId || 'Unknown'}\n` +
-            `${target.chatType === 'group' ? 'Group' : target.chatType === 'room' ? 'Room' : 'User'}: ${target.displayName || target.chatId}\n` +
-            `ตั้งแต่นี้คุณจะได้รับการแจ้งเตือนจาก Smart EE ที่นี่`
-        );
-    } catch (e) {
-        const err = new Error(`Couldn't send the test message: ${e.message}`);
-        err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
-        err.code = e.code || 'test_message_failed';
-        err.hint = e.hint;
-        throw err;
-    }
-
-    // 4) Encrypt the token at rest. Keep plaintext only for the duration of
+    // 3) Encrypt the token at rest. Keep plaintext only for the duration of
     //    this request. Schema stays the same string column — we just swap
     //    the field name from `token` to `tokenCipher`.
     const tokenCipher = EncryptToken(token);
@@ -5413,13 +5396,17 @@ async function prepareLineSubscription(rawDestination) {
 // Smart EE subscription: the user types a Group ID (numeric) + Pin ID (GUID).
 // We do NOT talk to the LINE Messaging API — smarteepro.com's relay already owns
 // the "(gid + pin) -> which LINE group" binding, so there is no chatId/token to
-// store here. We just verify by sending a one-shot test message through the
-// relay; a wrong Group/Pin is rejected by the relay and fails HERE, immediately,
-// instead of silently at first-alert time.
+// store here. The relay has NO read-only validate endpoint — its only operation
+// is "send a message", which would consume the LINE push quota. So at connect we
+// only validate the input FORMAT (numeric gid + GUID pin) and store it as
+// UNVERIFIED (`verifiedAt: null`). The real end-to-end check happens on demand
+// via `POST /api/subscription/:id/test`, which the user explicitly confirms
+// (it costs one push). A wrong Group/Pin therefore surfaces at test time, not
+// at connect — and the dispatcher also self-deactivates on a 4xx at dispatch.
 //
-// Stored destination = { gid, pinCipher } — gid + the Pin encrypted at rest.
-// The Pin is the per-group credential the dispatcher replays to the relay; the
-// shared `pas` API password lives in env (SMARTEE_NOTIFY_PAS), never in a row.
+// Stored destination = { gid, pinCipher, verifiedAt } — gid + the Pin encrypted
+// at rest. The Pin is the per-group credential the dispatcher replays to the
+// relay; the shared `pas` API password lives in env (SMARTEE_NOTIFY_PAS).
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 async function prepareSmartSubscription(rawDestination) {
     let parsed;
@@ -5451,26 +5438,13 @@ async function prepareSmartSubscription(rawDestination) {
         throw err;
     }
 
-    // End-to-end check: actually relay a confirmation to the bound LINE group.
-    try {
-        await smartEeNotify.sendNotify({
-            gid,
-            pin: pinId,
-            message: `✅ Smart EE Notification เชื่อมต่อสำเร็จ`,
-        });
-    } catch (e) {
-        const err = new Error(e.message);
-        err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
-        err.code = e.code || 'test_message_failed';
-        err.hint = e.hint;
-        throw err;
-    }
-
+    // No end-to-end check at connect — see the function header. We store the
+    // credentials unverified; the user confirms an explicit test to verify.
     // Store gid + the encrypted Pin. Never store the raw Pin or the `pas`.
     const enriched = {
         gid,
         pinCipher: EncryptToken(pinId),
-        verifiedAt: new Date().toISOString(),
+        verifiedAt: null,
     };
     const summary = { groupId: gid };
 
@@ -5651,6 +5625,115 @@ app.delete('/api/subscription/:id', authenticateToken, async (req, res) => {
         res.json({ success: true, message: 'Unsubscribed successfully' });
     } catch (err) {
         console.error('Error unsubscribing:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Send a one-shot TEST notification to a line/smart subscription's destination.
+// This is the only path that intentionally spends a LINE push message, so it is
+// explicit (the UI confirms first) and throttled by a short server-side cooldown
+// to protect both the user's LINE quota and the shared Smart EE relay password.
+// On success we stamp `verifiedAt` on the stored destination so the UI can show
+// the channel as verified.
+const TEST_COOLDOWN_MS = 5000;
+const _testCooldown = new Map(); // subscription_id -> last attempt epoch ms
+app.post('/api/subscription/:id/test', authenticateToken, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) {
+            return res.status(400).json({ success: false, error: 'Invalid subscription id' });
+        }
+
+        // Cooldown guard — applies even to failed sends so rapid retries can't
+        // drain the quota. The client mirrors this with a countdown button.
+        const last = _testCooldown.get(id) || 0;
+        const elapsed = Date.now() - last;
+        if (elapsed < TEST_COOLDOWN_MS) {
+            const retryAfter = Math.ceil((TEST_COOLDOWN_MS - elapsed) / 1000);
+            return res.status(429).json({
+                success: false,
+                error: `Please wait ${retryAfter}s before sending another test.`,
+                code: 'cooldown',
+                retryAfter,
+            });
+        }
+
+        // Must belong to the caller and still be active.
+        const row = await req.db.request()
+            .input('subscriptionId', sql.BigInt, id)
+            .input('userId', sql.UniqueIdentifier, req.user.id)
+            .query(`
+                SELECT subscription_id, channel, destination
+                FROM dbo.UserNotificationSubscription
+                WHERE subscription_id = @subscriptionId AND user_id = @userId AND is_active = 1
+            `);
+        if (!row.recordset.length) {
+            return res.status(404).json({ success: false, error: 'Subscription not found.' });
+        }
+
+        const { channel, destination } = row.recordset[0];
+        if (channel !== 'line' && channel !== 'smart') {
+            return res.status(400).json({
+                success: false,
+                error: 'Test notifications are only available for LINE and Smart EE channels.',
+            });
+        }
+        let d;
+        try { d = JSON.parse(destination); } catch {
+            return res.status(400).json({ success: false, error: 'Stored destination is corrupt.' });
+        }
+
+        // Mark the cooldown BEFORE sending so a failure still throttles retries.
+        _testCooldown.set(id, Date.now());
+
+        const testMessage =
+            '🔔 Smart EE test notification\n' +
+            'If you can read this, your notifications are set up correctly.';
+
+        try {
+            if (channel === 'line') {
+                const token = d.tokenCipher ? DecryptToken(d.tokenCipher) : d.token;
+                if (!token || !d.chatId) {
+                    const e = new Error('This LINE subscription is missing its credentials.');
+                    e.status = 400; throw e;
+                }
+                await lineApi.pushTextMessage(token, d.chatId, testMessage);
+            } else { // smart
+                const pin = d.pinCipher ? DecryptToken(d.pinCipher) : d.pin;
+                if (d.gid == null || !pin) {
+                    const e = new Error('This Smart EE subscription is missing its credentials.');
+                    e.status = 400; throw e;
+                }
+                await smartEeNotify.sendNotify({ gid: d.gid, pin, message: testMessage });
+            }
+        } catch (e) {
+            return res.status(e.status >= 400 && e.status < 500 ? 400 : 502).json({
+                success: false,
+                error: e.message,
+                code: e.code,
+                hint: e.hint,
+            });
+        }
+
+        // Stamp verifiedAt so the channel now reads as verified. Non-fatal if it
+        // fails — the message already went out.
+        d.verifiedAt = new Date().toISOString();
+        try {
+            await req.db.request()
+                .input('subscriptionId', sql.BigInt, id)
+                .input('destination', sql.NVarChar, JSON.stringify(d))
+                .query(`
+                    UPDATE dbo.UserNotificationSubscription
+                    SET destination = @destination, updated_at = GETDATE()
+                    WHERE subscription_id = @subscriptionId
+                `);
+        } catch (e) {
+            console.error('Test sent but failed to persist verifiedAt:', e.message);
+        }
+
+        res.json({ success: true, message: 'Test notification sent.', verifiedAt: d.verifiedAt });
+    } catch (err) {
+        console.error('Error sending test notification:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
