@@ -78,7 +78,7 @@ WebSerial (มิเตอร์/ซีเรียล) c_id < 100,000,000
 |-------|--------|
 | `NotifyConfig` | threshold ต่อ `mqtt_serial` + `dbkey` + `level` (point, delay) |
 | `NotifyLog` | log เหตุการณ์ alarm (`log_id`, `mqtt_serial`, `dbkey`, `level`, `value`, `point`, `event_time`, ...) |
-| `UserNotificationSubscription` | subscription ของ web push / LINE |
+| `UserNotificationSubscription` | subscription ของ web push / LINE / smart (channel column). channel `smart` เก็บ `{ gid, pinCipher }` ใน destination แล้วส่งผ่าน relay smarteepro.com (ไม่ต้องมีตาราง pairing) |
 
 ### Data / Domain
 | ตาราง | บทบาท |

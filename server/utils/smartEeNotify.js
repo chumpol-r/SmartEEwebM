@@ -43,12 +43,12 @@ function isConfigured() {
 // Returns the relay's response body (text). Throws SmartEeError on failure.
 async function sendNotify({ gid, pin, message }) {
     if (!NOTIFY_PAS) {
-        throw new SmartEeError('ยังไม่ได้ตั้งค่า SMARTEE_NOTIFY_PAS ในเซิร์ฟเวอร์', {
+        throw new SmartEeError('SMARTEE_NOTIFY_PAS is not configured on the server.', {
             status: 500, code: 'not_configured',
         });
     }
     if (gid == null || !pin) {
-        throw new SmartEeError('ต้องระบุทั้ง Group ID และ Pin ID', { status: 400, code: 'bad_request' });
+        throw new SmartEeError('Both Group ID and Pin ID are required.', { status: 400, code: 'bad_request' });
     }
 
     // `configure` is itself a querystring; it goes in as ONE field value (the
@@ -71,7 +71,7 @@ async function sendNotify({ gid, pin, message }) {
             body,
         });
     } catch (networkErr) {
-        throw new SmartEeError('เชื่อมต่อ Smart EE relay ไม่ได้ — ตรวจสอบอินเทอร์เน็ตของเซิร์ฟเวอร์', {
+        throw new SmartEeError("Couldn't reach the Smart EE relay — check the server's internet connection.", {
             status: 0, code: 'network', hint: networkErr.message,
         });
     }
@@ -82,8 +82,8 @@ async function sendNotify({ gid, pin, message }) {
         console.error(`[smartEeNotify] POST -> ${res.status}`, bodyText.slice(0, 500));
         const code = (res.status >= 400 && res.status < 500) ? 'rejected' : 'relay_error';
         throw new SmartEeError(
-            `Smart EE relay ปฏิเสธคำขอ (${res.status})${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`,
-            { status: res.status, code, hint: 'ตรวจสอบ Group ID / Pin ID ว่าถูกต้องและยังใช้งานได้' }
+            `The Smart EE relay rejected the request (${res.status})${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`,
+            { status: res.status, code, hint: 'Check that the Group ID and Pin ID are correct and still active.' }
         );
     }
     return bodyText;

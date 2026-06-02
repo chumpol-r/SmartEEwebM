@@ -48,30 +48,30 @@ function classifyError(status, body, path) {
     const detail = extractLineDetail(body);
     if (status === 400) {
         return new LineApiError(
-            `LINE ปฏิเสธคำขอ (400): ${detail || 'ข้อมูลไม่ถูกต้อง'}`,
+            `LINE rejected the request (400): ${detail || 'invalid data'}`,
             { status, code: 'bad_request', hint: `path=${path}` }
         );
     }
     if (status === 401) {
         return new LineApiError(
-            'Channel Access Token ไม่ถูกต้องหรือหมดอายุ',
-            { status, code: 'invalid_token', hint: detail || 'ตรวจสอบ Token ใน LINE Official Account Manager → Messaging API' }
+            'The Channel Access Token is invalid or has expired.',
+            { status, code: 'invalid_token', hint: detail || 'Check the token in LINE Official Account Manager → Messaging API.' }
         );
     }
     if (status === 403) {
         return new LineApiError(
-            'Token นี้ไม่มีสิทธิ์เข้าถึงข้อมูลที่ขอ (ตรวจสอบว่า Channel เป็น Messaging API)',
+            "This token isn't allowed to access the requested resource. Make sure the channel is a Messaging API channel.",
             { status, code: 'forbidden', hint: detail }
         );
     }
     if (status === 404) {
         return new LineApiError(
-            'ไม่พบกลุ่ม/ห้องนี้ — Bot อาจยังไม่ได้เข้าร่วม',
-            { status, code: 'chat_not_found', hint: detail || 'เชิญ LINE Official Account เข้ากลุ่มก่อน แล้วลองอีกครั้ง' }
+            'Group or room not found — the bot may not have joined it yet.',
+            { status, code: 'chat_not_found', hint: detail || 'Invite the LINE Official Account into the group first, then try again.' }
         );
     }
     if (status === 429) {
-        return new LineApiError('LINE API ถูก rate-limit ชั่วคราว กรุณาลองใหม่ในอีกครู่', { status, code: 'rate_limited', hint: detail });
+        return new LineApiError('The LINE API is temporarily rate-limited. Please try again shortly.', { status, code: 'rate_limited', hint: detail });
     }
     return new LineApiError(`LINE API error (${status}): ${detail || 'unknown'}`, { status, code: 'unknown', hint: `path=${path}` });
 }
@@ -90,7 +90,7 @@ async function lineFetch(path, { token, method = 'GET', body } = {}) {
             body: body ? JSON.stringify(body) : undefined,
         });
     } catch (networkErr) {
-        throw new LineApiError('เชื่อมต่อ LINE API ไม่ได้ — ตรวจสอบอินเทอร์เน็ตของเซิร์ฟเวอร์', {
+        throw new LineApiError("Couldn't reach the LINE API — check the server's internet connection.", {
             status: 0, code: 'network', hint: networkErr.message,
         });
     }
@@ -124,7 +124,7 @@ async function getBotInfo(token) {
 // Returns { chatType, chatId, displayName?, pictureUrl? }
 async function verifyChatTarget(token, chatId) {
     if (!chatId || typeof chatId !== 'string') {
-        throw new LineApiError('Chat ID ว่าง', { status: 400, code: 'invalid_chatid' });
+        throw new LineApiError('Chat ID is empty.', { status: 400, code: 'invalid_chatid' });
     }
     const head = chatId.charAt(0).toUpperCase();
 
@@ -144,7 +144,7 @@ async function verifyChatTarget(token, chatId) {
         return { chatType: 'user', chatId, displayName: p.displayName, pictureUrl: p.pictureUrl };
     }
     throw new LineApiError(
-        `รูปแบบ Chat ID ไม่ถูกต้อง (ขึ้นต้นด้วย U / C / R เท่านั้น พบ '${head}')`,
+        `Invalid Chat ID format — it must start with U, C, or R (got '${head}').`,
         { status: 400, code: 'invalid_chatid_prefix' }
     );
 }

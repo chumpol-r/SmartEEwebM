@@ -235,7 +235,7 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
             setTimeout(() => { onClose?.(); }, summary ? 1800 : 1100);
         } catch (err) {
             console.error('Subscription submit failed:', err);
-            setSubmitError(err?.message || 'การเชื่อมต่อล้มเหลว');
+            setSubmitError(err?.message || 'Connection failed. Please try again.');
             setSubmitting(false);
         }
     };
@@ -382,31 +382,43 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                     {/* Config panel — min-height prevents layout shift */}
                     <div className="min-h-[260px]">
                         {selected === 'free' && (
-                            webPushSubscribed ? (
-                                <div className="flex items-start gap-3 p-5 rounded-xl bg-emerald-500/5 border border-emerald-500/30">
-                                    <div className="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                                        <CheckCircle2 size={18} className="text-emerald-300" />
+                            <div className="space-y-4">
+                                {webPushSubscribed ? (
+                                    <div className="flex items-start gap-3 p-5 rounded-xl bg-emerald-500/5 border border-emerald-500/30">
+                                        <div className="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                                            <CheckCircle2 size={18} className="text-emerald-300" />
+                                        </div>
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-white">Web Push is active on this device</h4>
+                                            <p className="mt-1 text-sm text-slate-300">
+                                                This browser is receiving real-time notifications. Disabling will stop delivery here only — your other devices are unaffected.
+                                            </p>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h4 className="text-sm font-semibold text-white">Web Push is active on this device</h4>
-                                        <p className="mt-1 text-sm text-slate-300">
-                                            This browser is receiving real-time notifications. Disabling will stop delivery here only — your other devices are unaffected.
-                                        </p>
+                                ) : (
+                                    <div className="flex items-start gap-3 p-5 rounded-xl bg-blue-500/5 border border-blue-500/30">
+                                        <div className="w-9 h-9 rounded-lg bg-blue-500/15 border border-blue-500/30 flex items-center justify-center shrink-0">
+                                            <Bell size={18} className="text-blue-300" />
+                                        </div>
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-white">Web Push is ready instantly</h4>
+                                            <p className="mt-1 text-sm text-slate-300">
+                                                Your browser will ask for permission. Once enabled, this device will receive notifications across all your authorized menus.
+                                            </p>
+                                        </div>
                                     </div>
-                                </div>
-                            ) : (
-                                <div className="flex items-start gap-3 p-5 rounded-xl bg-blue-500/5 border border-blue-500/30">
-                                    <div className="w-9 h-9 rounded-lg bg-blue-500/15 border border-blue-500/30 flex items-center justify-center shrink-0">
-                                        <Bell size={18} className="text-blue-300" />
+                                )}
+
+                                {/* Submission error (permission blocked, unsupported browser, etc.) */}
+                                {submitError && (
+                                    <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/10 border border-rose-500/40">
+                                        <X size={14} className="text-rose-300 mt-0.5 shrink-0" />
+                                        <div className="text-xs text-rose-200 whitespace-pre-line">
+                                            {submitError}
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h4 className="text-sm font-semibold text-white">Web Push is ready instantly</h4>
-                                        <p className="mt-1 text-sm text-slate-300">
-                                            Your browser will ask for permission. Once enabled, this device will receive notifications across all your authorized menus.
-                                        </p>
-                                    </div>
-                                </div>
-                            )
+                                )}
+                            </div>
                         )}
 
                         {selected === 'smart' && (
@@ -477,7 +489,7 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                                         <CheckCircle2 size={18} className="text-emerald-300 shrink-0" />
                                         <div className="leading-tight">
                                             <div className="text-sm font-semibold text-white">Smart EE Notification</div>
-                                            <div className="text-xs text-emerald-200/90">เชื่อมต่อสำเร็จ</div>
+                                            <div className="text-xs text-emerald-200/90">Connected successfully</div>
                                         </div>
                                     </div>
                                 )}
@@ -557,7 +569,7 @@ const SubscriptionModal = ({ open, onClose, currentTier = null, webPushSubscribe
                                     <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/40">
                                         <CheckCircle2 size={16} className="text-emerald-300 mt-0.5 shrink-0" />
                                         <div className="text-xs text-emerald-100 space-y-0.5">
-                                            <div>เชื่อมต่อสำเร็จ — ส่งข้อความทดสอบไปยัง LINE แล้ว</div>
+                                            <div>Connected — a test message has been sent to LINE</div>
                                             <div className="text-emerald-200/80">
                                                 Bot: <span className="font-medium text-white">{submitSummary.bot?.displayName || submitSummary.bot?.basicId || 'Unknown'}</span>
                                                 <span className="mx-1">→</span>

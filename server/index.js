@@ -5324,14 +5324,14 @@ async function prepareLineSubscription(rawDestination) {
     try {
         parsed = typeof rawDestination === 'string' ? JSON.parse(rawDestination) : rawDestination;
     } catch {
-        const err = new Error('destination ไม่ใช่ JSON ที่ถูกต้อง');
+        const err = new Error('Invalid destination format (expected JSON).');
         err.status = 400;
         throw err;
     }
     const token = parsed?.token?.trim();
     const chatId = parsed?.chatId?.trim();
     if (!token || !chatId) {
-        const err = new Error('ต้องระบุทั้ง token และ chatId');
+        const err = new Error('Both the Channel Access Token and Chat ID are required.');
         err.status = 400;
         throw err;
     }
@@ -5372,7 +5372,7 @@ async function prepareLineSubscription(rawDestination) {
             `ตั้งแต่นี้คุณจะได้รับการแจ้งเตือนจาก Smart EE ที่นี่`
         );
     } catch (e) {
-        const err = new Error(`ส่งข้อความทดสอบไม่สำเร็จ: ${e.message}`);
+        const err = new Error(`Couldn't send the test message: ${e.message}`);
         err.status = e.status >= 400 && e.status < 500 ? 400 : 502;
         err.code = e.code || 'test_message_failed';
         err.hint = e.hint;
@@ -5426,27 +5426,27 @@ async function prepareSmartSubscription(rawDestination) {
     try {
         parsed = typeof rawDestination === 'string' ? JSON.parse(rawDestination) : rawDestination;
     } catch {
-        const err = new Error('destination ไม่ใช่ JSON ที่ถูกต้อง');
+        const err = new Error('Invalid destination format (expected JSON).');
         err.status = 400;
         throw err;
     }
     const groupIdRaw = String(parsed?.groupId ?? '').trim();
     const pinId = String(parsed?.pinId ?? '').trim();
     if (!groupIdRaw || !pinId) {
-        const err = new Error('ต้องระบุทั้ง Group ID และ Pin ID');
+        const err = new Error('Both Group ID and Pin ID are required.');
         err.status = 400;
         throw err;
     }
     // Group ID is the numeric workspace id the admin issued (e.g. 162).
     const gid = parseInt(groupIdRaw, 10);
     if (!Number.isInteger(gid) || gid <= 0) {
-        const err = new Error('Group ID ต้องเป็นตัวเลข');
+        const err = new Error('Group ID must be a number.');
         err.status = 400;
         throw err;
     }
     // Pin ID must be a GUID.
     if (!GUID_RE.test(pinId)) {
-        const err = new Error('Pin ID ไม่ถูกต้อง (ต้องเป็นรหัสรูปแบบ UUID)');
+        const err = new Error('Invalid Pin ID — it must be a UUID-formatted code.');
         err.status = 400;
         throw err;
     }
@@ -5624,9 +5624,9 @@ app.post('/api/subscription', authenticateToken, async (req, res) => {
         if (msg.includes('String or binary data would be truncated')) {
             return res.status(500).json({
                 success: false,
-                error: 'ข้อมูลยาวเกินกว่าคอลัมน์ destination จะรับได้',
+                error: 'The data is too long for the destination column.',
                 code: 'db_truncation',
-                hint: 'รัน: ALTER TABLE dbo.UserNotificationSubscription ALTER COLUMN destination NVARCHAR(MAX) NULL;',
+                hint: 'Run: ALTER TABLE dbo.UserNotificationSubscription ALTER COLUMN destination NVARCHAR(MAX) NULL;',
             });
         }
         res.status(500).json({ success: false, error: err.message });
@@ -6102,13 +6102,13 @@ app.post('/api/notify/save', async (req, res) => {
                 // Check pairs (only if both ends present)
                 const vh = post['Very High'], h = post['High'];
                 if (vh !== undefined && h !== undefined && h > vh) {
-                    const err = new Error(`${dbKey}: High (${h}) ต้อง ≤ Very High (${vh})`);
+                    const err = new Error(`${dbKey}: High (${h}) must be ≤ Very High (${vh})`);
                     err.code = 'MONOTONIC';
                     throw err;
                 }
                 const l = post['Low'], vl = post['Very Low'];
                 if (l !== undefined && vl !== undefined && vl > l) {
-                    const err = new Error(`${dbKey}: Very Low (${vl}) ต้อง ≤ Low (${l})`);
+                    const err = new Error(`${dbKey}: Very Low (${vl}) must be ≤ Low (${l})`);
                     err.code = 'MONOTONIC';
                     throw err;
                 }
@@ -6141,8 +6141,8 @@ app.post('/api/notify/save', async (req, res) => {
                     .query(`SELECT 1 FROM dbo.NotifyConfig WHERE notify_id = @notifyId`);
                 const err = new Error(
                     exists.recordset.length === 0
-                        ? `Row (notifyId=${u.notifyId}) ถูกลบโดยผู้ใช้อื่น กรุณา refresh`
-                        : `Row (notifyId=${u.notifyId}) ถูกแก้ไขโดยผู้ใช้อื่น กรุณา refresh แล้วลองใหม่`
+                        ? `Row (notifyId=${u.notifyId}) was deleted by another user. Please refresh.`
+                        : `Row (notifyId=${u.notifyId}) was modified by another user. Please refresh and try again.`
                 );
                 err.code = 'CONFLICT';
                 throw err;
@@ -6194,10 +6194,10 @@ app.post('/api/notify/save', async (req, res) => {
             status = 409;
         } else if (isMonotonic) {
             status = 422;
-            friendly = `ค่า point ไม่ถูกต้อง: ${err.message}`;
+            friendly = `Invalid point value: ${err.message}`;
         } else if (isUnique) {
             status = 409;
-            friendly = 'Level นี้ถูกเพิ่มโดยผู้ใช้อื่นแล้ว กรุณา refresh แล้วลองใหม่';
+            friendly = 'This level was already added by another user. Please refresh and try again.';
         }
         res.status(status).json({ success: false, error: friendly });
     }

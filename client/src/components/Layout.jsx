@@ -198,12 +198,12 @@ const Layout = ({ children }) => {
         if (!('PushManager' in window))      missing.push('Push API');
         if (typeof Notification === 'undefined') missing.push('Notification API');
         if (missing.length) {
-            alert(
-                'เบราว์เซอร์นี้ไม่รองรับ Web Push (ขาด: ' + missing.join(', ') + ')\n\n' +
-                'หากเปิดจาก LINE / Facebook / Instagram กรุณากดเมนู ⋮ มุมขวาบน → ' +
-                '"เปิดใน Chrome" แล้วลองใหม่อีกครั้ง'
+            // Thrown so the SubscriptionModal can show it in its error panel.
+            throw new Error(
+                `This browser doesn't support Web Push (missing: ${missing.join(', ')}).\n` +
+                'If you opened this from LINE, Facebook, or Instagram, tap the ⋮ menu ' +
+                '(top-right) → "Open in Chrome" and try again.'
             );
-            return;
         }
 
         setSubscribing(true);
@@ -214,7 +214,10 @@ const Layout = ({ children }) => {
             const permission = await Notification.requestPermission();
             if (permission !== 'granted') {
                 console.warn('Notification permission not granted:', permission);
-                return;
+                throw new Error(
+                    'Notification permission was blocked. Please allow notifications for this ' +
+                    'site in your browser settings, then try again.'
+                );
             }
 
             // 2) Register the service worker (idempotent — returns existing if already there).
@@ -224,7 +227,7 @@ const Layout = ({ children }) => {
             // 3) Fetch the server's VAPID public key.
             const keyRes = await axios.get('/api/webpush/public-key');
             const publicKey = keyRes.data?.publicKey;
-            if (!publicKey) throw new Error('Server VAPID public key unavailable');
+            if (!publicKey) throw new Error("The server's push key is unavailable right now. Please try again later.");
 
             // 4) Subscribe via the browser's push service (FCM/APNs/etc).
             // Drop any stale subscription first — a leftover one bound to a
@@ -255,7 +258,9 @@ const Layout = ({ children }) => {
             setShowSubHint(false);
         } catch (error) {
             console.error('Error subscribing:', error);
-            alert('สมัครรับการแจ้งเตือนไม่สำเร็จ: ' + (error.message || error));
+            // Re-throw so the SubscriptionModal surfaces a clean message in its
+            // error panel instead of the flow silently reporting success.
+            throw error;
         } finally {
             setSubscribing(false);
         }
@@ -316,7 +321,7 @@ const Layout = ({ children }) => {
             // Re-throw a friendly Error so the modal's catch handler can show
             // a clean message instead of a raw "Request failed with 400".
             const body = err.response?.data;
-            const msg  = body?.error || err.message || 'เชื่อมต่อ LINE ไม่สำเร็จ';
+            const msg  = body?.error || err.message || 'Failed to connect to LINE. Please try again.';
             const hint = body?.hint ? `\n${body.hint}` : '';
             const wrapped = new Error(`${msg}${hint}`);
             wrapped.code = body?.code;
@@ -345,7 +350,7 @@ const Layout = ({ children }) => {
             return res.data; // includes { smart: { groupId } }
         } catch (err) {
             const body = err.response?.data;
-            const msg  = body?.error || err.message || 'เชื่อมต่อ Smart EE ไม่สำเร็จ';
+            const msg  = body?.error || err.message || 'Failed to connect to Smart EE. Please try again.';
             const hint = body?.hint ? `\n${body.hint}` : '';
             const wrapped = new Error(`${msg}${hint}`);
             wrapped.code = body?.code;
@@ -657,9 +662,9 @@ const Layout = ({ children }) => {
                     <div className="flex items-start gap-3 bg-slate-800 border border-blue-500/40 rounded-xl px-4 py-3 shadow-lg shadow-blue-900/30">
                         <Bell size={18} className="text-blue-400 mt-0.5 shrink-0" />
                         <div>
-                            <p className="text-sm font-medium text-white">สมัครรับการแจ้งเตือน</p>
+                            <p className="text-sm font-medium text-white">Enable notifications</p>
                             <p className="text-xs text-slate-400 mt-0.5">
-                                กดปุ่ม “รับการแจ้งเตือน” ด้านบนเพื่อรับการแจ้งเตือนแบบเรียลไทม์
+                                Tap the “Notifications” button above to receive real-time alerts
                             </p>
                         </div>
                     </div>

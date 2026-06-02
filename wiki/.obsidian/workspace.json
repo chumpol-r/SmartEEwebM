@@ -1,20 +1,24 @@
 {
   "main": {
-    "id": "c15159b8b7fae5db",
+    "id": "e8c28a410874dece",
     "type": "split",
     "children": [
       {
-        "id": "314c06a4a993b7e1",
+        "id": "41f9d00b7b02b43e",
         "type": "tabs",
         "children": [
           {
-            "id": "074a6ccffb56ee28",
+            "id": "df83feb52c37064f",
             "type": "leaf",
             "state": {
-              "type": "graph",
-              "state": {},
-              "icon": "lucide-git-fork",
-              "title": "Graph view"
+              "type": "markdown",
+              "state": {
+                "file": "architecture/overview.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "overview"
             }
           }
         ]
@@ -23,15 +27,15 @@
     "direction": "vertical"
   },
   "left": {
-    "id": "c72b59aca35ef512",
+    "id": "3824e6a2cf4a0798",
     "type": "split",
     "children": [
       {
-        "id": "4244faadbee5bf0d",
+        "id": "c6435150412be3cc",
         "type": "tabs",
         "children": [
           {
-            "id": "cacf8e90ff90948c",
+            "id": "9359e676e5f2d990",
             "type": "leaf",
             "state": {
               "type": "file-explorer",
@@ -44,7 +48,7 @@
             }
           },
           {
-            "id": "b883d2538c791f79",
+            "id": "3f3e87e60378eefd",
             "type": "leaf",
             "state": {
               "type": "search",
@@ -61,7 +65,7 @@
             }
           },
           {
-            "id": "25e001d5783df85c",
+            "id": "6ffcb883ad950ec3",
             "type": "leaf",
             "state": {
               "type": "bookmarks",
@@ -77,19 +81,20 @@
     "width": 300
   },
   "right": {
-    "id": "716ed8bcca96ba2c",
+    "id": "27b1820df3ed0130",
     "type": "split",
     "children": [
       {
-        "id": "d8f8174dde0ba2c6",
+        "id": "1bd89f0c3998ce2c",
         "type": "tabs",
         "children": [
           {
-            "id": "caaf36f2d9971a60",
+            "id": "7cbb010bc6ffbd72",
             "type": "leaf",
             "state": {
               "type": "backlink",
               "state": {
+                "file": "architecture/overview.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -99,24 +104,25 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks"
+              "title": "Backlinks for overview"
             }
           },
           {
-            "id": "86fd6a60552442ae",
+            "id": "2547293239598c81",
             "type": "leaf",
             "state": {
               "type": "outgoing-link",
               "state": {
+                "file": "architecture/overview.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links"
+              "title": "Outgoing links from overview"
             }
           },
           {
-            "id": "bcf7147ee4178509",
+            "id": "8f20b102b2a42c38",
             "type": "leaf",
             "state": {
               "type": "tag",
@@ -131,7 +137,7 @@
             }
           },
           {
-            "id": "4a9aecee9d7909c2",
+            "id": "2c8ce18db208c3a0",
             "type": "leaf",
             "state": {
               "type": "all-properties",
@@ -145,17 +151,18 @@
             }
           },
           {
-            "id": "c8847e5cbbe3643e",
+            "id": "e7cc7a3340538125",
             "type": "leaf",
             "state": {
               "type": "outline",
               "state": {
+                "file": "architecture/overview.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline"
+              "title": "Outline of overview"
             }
           }
         ]
@@ -176,29 +183,14 @@
       "bases:Create new base": false
     }
   },
-  "active": "074a6ccffb56ee28",
+  "active": "df83feb52c37064f",
   "lastOpenFiles": [
-    "wiki/decisions/003-smart-ee-notification-relay.md",
-    "client/src/__preview_modal_test.jsx",
-    "server/index.js.tmp.9656.93d88afedb5f",
-    "server/index.js.tmp.9656.f47fb4d7e4b8",
-    "server/index.js.tmp.9656.0e3243fda62e",
-    "server/index.js.tmp.9656.5dd0f61de670",
-    "wiki/gotchas.md",
-    "wiki/decisions/003-smart-ee-notification-relay.md.tmp.13448.8af8a30aca2f",
-    "client/node_modules/@babel/helper-module-transforms/README.md",
-    "Untitled.canvas",
-    "wiki/architecture/realtime-and-notifications.md",
-    "server/index.js.tmp.13448.8f698e16db9d",
-    "server/scripts/_tmp_test_smart_dispatch.js",
-    "server/utils/smartEeNotify.js.tmp.35356.b1d960e34af8",
-    "server/index.js.tmp.35356.ae8e96a392de",
-    "wiki/decisions/001-separate-worker-process.md",
-    "wiki/decisions/002-why-no-jwt.md",
-    "wiki/HOW-TO-USE.md",
-    "wiki/index.md",
-    "wiki/log.md",
-    "wiki/WIKI.md",
-    "wiki/db/schema-and-conventions.md"
+    "log.md.tmp.12328.9675076d049b",
+    "architecture/realtime-and-notifications.md.tmp.12328.d989b41df4a0",
+    "architecture/realtime-and-notifications.md.tmp.12328.d5820a0376e2",
+    "log.md.tmp.35504.d61544b1a623",
+    "HOW-TO-USE.md",
+    "architecture/auth-and-permissions.md",
+    "db/schema-and-conventions.md"
   ]
 }

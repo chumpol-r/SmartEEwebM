@@ -48,10 +48,10 @@ const Lightbox = ({ open, src, alt, onClose }) => {
                 {errored ? (
                     <div className="bg-slate-900 border border-slate-700 rounded-xl p-8 text-center max-w-md">
                         <ImageOff size={32} className="text-slate-500 mx-auto mb-3" />
-                        <p className="text-sm text-slate-200 mb-1">ยังไม่ได้วางไฟล์รูป</p>
+                        <p className="text-sm text-slate-200 mb-1">Image file not found</p>
                         <code className="text-xs text-slate-400 break-all">{src}</code>
                         <p className="mt-3 text-xs text-slate-500">
-                            วางไฟล์ใน <code className="text-slate-300">client/public/</code> แล้วรีโหลดหน้า
+                            Place the file in <code className="text-slate-300">client/public/</code> and reload the page
                         </p>
                     </div>
                 ) : (
@@ -63,7 +63,7 @@ const Lightbox = ({ open, src, alt, onClose }) => {
                             className="max-h-[88vh] w-auto object-contain rounded-xl shadow-2xl ring-1 ring-white/10 bg-white"
                         />
                         <p className="mt-3 text-xs text-slate-400 text-center">
-                            กด <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">ESC</kbd> หรือคลิกพื้นที่ว่างเพื่อปิด
+                            Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">ESC</kbd> or click outside to close
                         </p>
                     </>
                 )}
@@ -78,12 +78,12 @@ const TUTORIALS = {
     token: {
         label: 'How To Get Channel Access Token',
         src: '/line-tutorial-token.png',
-        alt: 'ขั้นตอนการดึง Channel Access Token จาก LINE Official Account Manager',
+        alt: 'How to get the Channel Access Token from LINE Official Account Manager',
     },
     group: {
         label: 'How To Get Group ID',
         src: '/line-tutorial-groupid.png',
-        alt: 'ขั้นตอนการดึงรหัส Group ID จากลิงก์เชิญกลุ่ม LINE',
+        alt: 'How to get the Group ID from a LINE group invite link',
     },
 };
 
@@ -150,7 +150,7 @@ const LineCredentialsGuide = ({ type = null }) => {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 px-0.5">
                 <span className="inline-flex items-center gap-1.5">
                     <HelpCircle size={12} className="text-slate-500" />
-                    ไม่ทราบวิธีหา? ดูภาพประกอบ:
+                    Not sure where to find these? See the guides:
                 </span>
                 <LinkBtn id="token" />
                 <span className="text-slate-700">·</span>

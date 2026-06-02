@@ -1,11 +1,13 @@
 ---
 title: Gotchas & ข้อควรระวัง
 tags: [gotchas, pitfalls]
-updated: 2026-05-29
+updated: 2026-06-01
 sources:
   - server/index.js
   - server/db.js
   - server/utils/crypto.js
+  - server/utils/smartEeNotify.js
+  - client/src/components/Layout.jsx
 ---
 
 # Gotchas & ข้อควรระวัง
@@ -49,6 +51,23 @@ sources:
 - ถ้า web push ไม่ส่ง: เช็คว่าตั้ง `VAPID_*` ครบ และ `VAPID_SUBJECT` ขึ้นต้น `mailto:`/`https://`
   (iOS/APNs ตอบ 403 ถ้าเป็นอีเมลเปล่า) — `server/worker.js:32`.
 - อย่ารัน `worker.js` พร้อมกับตั้ง `ENABLE_MQTT_WORKER=true` — จะได้ MQTT notifier ซ้ำสองตัว.
+
+### Smart EE relay (channel `smart` — `server/utils/smartEeNotify.js`)
+- **relay รับ newline จริงไม่ได้** — ส่ง message ที่มี `\n`/`\r\n` (real byte) ไป relay ของ
+  smarteepro.com จะตอบ **400 Bad Request** (ทั้ง urlencoded และ multipart). ต้องแปลงเป็น
+  **literal `\n` (สองตัวอักษร backslash+n)** ก่อนส่ง — relay จะไปขยายเป็นบรรทัดใหม่ฝั่ง LINE เอง.
+  โค้ดทำให้แล้วใน `sendNotify` (`.replace(/\r\n?|\n/g, '\\n')`). **นี่คือสาเหตุจริงของ 400** ที่
+  หลอกว่าเป็นเรื่อง body encoding ตอนแรก.
+- **อย่าใช้ `FormData` (undici) กับ relay นี้** — multipart ที่ Node สร้างโดน relay (parser legacy)
+  ปฏิเสธ 400; ใช้ `application/x-www-form-urlencoded` (`URLSearchParams`) แทน. ข้อความล้วนไม่ต้องใช้
+  multipart อยู่แล้ว.
+- ต้องตั้ง env `SMARTEE_NOTIFY_PAS` (รหัส API กลาง) — ไม่ตั้ง: ตอน subscribe ตอบ 500 `not_configured`,
+  ฝั่ง dispatcher จะ **ข้ามเงียบ** (ไม่ส่ง ไม่ crash). ดู [[003-smart-ee-notification-relay]].
+
+### UI error handling (notification subscribe)
+- **webpush (free tier) แจ้ง error ไม่เหมือน line/smart** — `handleSubscribe` ใน `Layout.jsx` จับ error
+  เองแล้ว `alert()` **โดยไม่ throw ต่อ** → เวลา subscribe ผ่าน modal, modal เด้ง "Activated" ทั้งที่ล้มเหลว
+  (permission denied ก็เงียบ). line/smart โชว์ error เป็นกล่อง inline พร้อม hint. (known gap — ยังไม่แก้)
 
 ## เอกสารที่ทำให้สับสน
 
