@@ -16,12 +16,14 @@ sources:
   - client/src/components/SubscriptionModal.jsx
   - client/src/components/SubscriptionModalV2.jsx
   - client/src/components/SubscribeButton.jsx
+  - client/src/components/WebPushDeviceList.jsx
   - client/src/contexts/SubscriptionContext.jsx
   - client/src/pages/NotifyConfig.jsx
   - client/src/components/Layout.jsx:141
   - client/src/index.css:90
   - server/index.js:1018
   - server/index.js:5247
+  - server/index.js:5611
   - server/index.js:5640
 ---
 
@@ -143,10 +145,51 @@ pin ต่อ tick แล้ว replay เข้า relay; 4xx จาก relay =
 > เพื่อให้สื่อความหมาย channel สอดคล้องกันทั้งแอป. ถ้าเพิ่ม channel ใหม่ ต้องเพิ่มทั้ง
 > `CHANNEL_OPTIONS` (ฝั่ง modal) และ token สีใน `index.css`.
 
-## Subscription UI — สมัคร/จัดการ channel (`SubscriptionModal`)
+## Subscription UI — สมัคร/จัดการ channel
 
-UI สมัครแจ้งเตือนอยู่ใน `client/src/components/SubscriptionModal.jsx` (เปิดจาก `SubscribeButton`
-บน `Layout.jsx`). มี 3 การ์ด tier: `free` (Web Push), `smart` (Smart EE), `line` (LINE Bot).
+มี **2 ทางเข้า** ที่ใช้ engine เดียวกัน (`Layout.jsx` ผ่าน [[#แชร์ subscription engine ข้ามหน้า subscriptioncontext]]) แต่ตอนนี้ **UI ต่างกัน**:
+
+| ทางเข้า | component | ขอบเขต UI |
+|---|---|---|
+| ปุ่ม `SubscribeButton` บน header (`Layout.jsx`) | `SubscriptionModal.jsx` (V1) | **Web Push อย่างเดียว + device manager** |
+| ปุ่ม "Notification Channels" บน `NotifyConfig` | `SubscriptionModalV2.jsx` (V2) | 3 การ์ด tier: `free`/`smart`/`line` (ยังเต็ม) |
+
+> ⚠️ CONTRADICTION (2026-06-02): เดิม `SubscriptionModalV2` เป็น "design variant ที่ behavior
+> เหมือน `SubscriptionModal` เป๊ะ" (ต่างแค่ shell). **ตอนนี้ไม่จริงแล้ว** — V1 ถูกรื้อให้เหลือเฉพาะ
+> Web Push (ตัดการ์ด tier, SecretField, Connect/Test, ConfirmDialog ของ smart/line ออก) แล้วเพิ่ม
+> **device manager** เข้าไปแทน ส่วน V2 ยัง 3-tier เหมือนเดิม. ทั้งสองยังแชร์ handler ชุดเดียวใน
+> `Layout.jsx` (ไม่ duplicate logic) — ต่างกันเฉพาะ presentational. ผลคือปุ่ม header (web push)
+> กับปุ่ม NotifyConfig (3 channel) **inconsistent โดยตั้งใจ** ตาม scope ที่ตกลง.
+
+### Web Push device manager (`WebPushDeviceList`)
+แยกเป็น **component ใช้ร่วม** `client/src/components/WebPushDeviceList.jsx` — ทั้ง header modal (V1)
+และ V2 (การ์ด `free` ใน `NotifyConfig`) import ตัวเดียวกัน → device UI มี source เดียว ไม่ drift.
+V2 รับ `devices`/`currentDeviceId`/`onRemoveDevice` ผ่าน `SubscriptionContext` (เพิ่มเข้า value แล้ว);
+component ถือเฉพาะ state confirm/removing/error ต่อ row ส่วน data + action มาจาก engine ใน `Layout.jsx`.
+
+โชว์ **รายการอุปกรณ์ทั้งหมดของ account** ที่ subscribe Web Push ไว้ พร้อมลบรายเครื่อง:
+- ข้อมูลมาจาก `GET /api/subscription` (`server/index.js:5247`) — query `WHERE user_id = @userId AND
+  is_active = 1 ORDER BY updated_at DESC` (user จาก token ไม่ใช่ client). `Layout.jsx` `refreshSubscriptions`
+  กรองเหลือ `channel === 'webpush'` เก็บใน state `webPushDevices` → ส่งเข้า modal เป็น prop `devices`.
+- แต่ละ row = 1 `subscription_id`; **`isThisDevice` = `device_id === getDeviceId()`** (`getDeviceId` อ่านจาก
+  `localStorage.deviceId` — UUID สุ่มถาวรต่อ browser). `device_label` (`"Chrome on Windows"`) ใช้ **display
+  อย่างเดียว ไม่ unique** — match/ลบ ใช้ `subscription_id`/`device_id` เท่านั้น.
+- **ลบ** = `DELETE /api/subscription/:id` (`server/index.js:5611`, soft-delete `is_active=0` + ownership
+  check). เครื่องนี้: `pushManager.unsubscribe()` + DELETE; เครื่องอื่น: DELETE อย่างเดียว (revoke
+  pushManager ของเครื่องอื่นไม่ได้ — browser นั้นเหลือ subscription ค้างแต่จะไม่ถูกส่งถึงอีก). UI ใช้
+  **inline confirm** ต่อ row (ไม่เด้ง dialog ซ้อน).
+- ปุ่ม footer **"Enable Web Push" โผล่เฉพาะตอนเครื่องนี้ยังไม่ subscribe** — ลบเครื่องนี้ทำผ่าน row
+  (badge "This device") จึงไม่มี disable affordance ซ้ำซ้อน.
+- **ทุก mutation (subscribe/unsubscribe/removeDevice) เรียก `refreshSubscriptions()` หลังสำเร็จ** เพื่อให้
+  `webPushDevices` ไม่ stale (bug เดิม: subscribe แล้ว list ไม่ขึ้นจนกว่าจะ refresh หน้า เพราะ handler
+  set แค่ `isSubscribed` ไม่ได้ refresh).
+- **Security:** `sanitizeDestination` คืน `null` สำหรับ channel `webpush` (`server/index.js:5262`) —
+  ไม่ส่ง `endpoint`/`p256dh`/`auth` keys ออก client (client ไม่ได้ใช้). response เพิ่ม `createdAt`
+  ไว้โชว์ "Added …".
+
+> **smart/line ไม่ใช่ "อุปกรณ์"** — เป็น account-level จึงไม่อยู่ใน device list (กรองออกตั้งแต่
+> `channel === 'webpush'`) และจัดการที่ V2 (`NotifyConfig`) เท่านั้น. หัวข้อด้านล่าง
+> (Connected read-only / Connect-vs-Test / `/test`) จึงใช้กับ **V2** เป็นหลัก.
 
 **สถานะ per-channel (`channelStatus`)** — `Layout.jsx:141` เก็บ map ต่อ channel
 `{ subscribed, subscriptionId, info }` โดย build จาก `GET /api/subscription`
@@ -193,10 +236,10 @@ permission+SW+VAPID), `handleSubscribeLine`/`handleSubscribeSmart`, `handleSendT
   `useSubscription()` ดึง props ชุดเดียวกัน แล้ว render modal ของตัวเองด้วย **local open state**.
 - `useSubscription()` **throw ถ้าถูกใช้นอก Provider** (fail ชัด ไม่ใช่ undefined เงียบ ๆ).
 
-**`SubscriptionModalV2.jsx`** = design variant ของ `SubscriptionModal` — **behavior เหมือนกันเป๊ะ**
-(form-state/handlers/flow คัดลอกตรง) ต่างแค่ shell/header/footer (icon-tile gradient, `rounded-3xl`).
-ใช้ใน `NotifyConfig.jsx` ผ่านปุ่ม **"Notification Channels"** ที่ header. การ subscribe จากปุ่มนี้กับจาก
-`SubscribeButton` บน header อ่าน/เขียน `channelStatus` ก้อนเดียวกัน → sync เสมอ.
+**`SubscriptionModalV2.jsx`** = modal 3-tier เต็ม (free/smart/line) ใช้ใน `NotifyConfig.jsx` ผ่านปุ่ม
+**"Notification Channels"** ที่ header. เดิมคัดลอก behavior จาก `SubscriptionModal` เป๊ะ แต่หลัง
+2026-06-02 **V1 รื้อเป็น Web Push-only แล้ว V2 ยังเต็ม** (ดู CONTRADICTION ด้านบน). ทั้งคู่ยังอ่าน/เขียน
+`channelStatus`/engine ก้อนเดียวกันผ่าน context → smart/line ที่ connect จาก V2 ยัง sync ทุกที่.
 
 > ถ้าจะปรับ flow การ subscribe (เพิ่ม channel, เปลี่ยน payload) ให้แก้ที่ handler ใน `Layout.jsx`
 > ที่เดียว — modal ทุกตัว (V1/V2) ได้ผลตามอัตโนมัติ. ส่วน design แก้แยกในไฟล์ modal นั้น ๆ ได้อิสระ.

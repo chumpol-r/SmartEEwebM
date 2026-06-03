@@ -5261,6 +5261,11 @@ app.get('/api/subscription', authenticateToken, async (req, res) => {
         // display info so the UI can render "Connected to: …".
         const sanitizeDestination = (channel, raw) => {
             if (!raw) return null;
+            // Web Push: the stored destination is the raw push subscription
+            // (endpoint + p256dh/auth keys). The client never needs it — device
+            // rows are identified by device_id/device_label — so we never expose
+            // the endpoint/keys.
+            if (channel === 'webpush') return null;
             // Smart EE: surface only the Group ID — never the encrypted Pin.
             if (channel === 'smart') {
                 try {
@@ -5303,6 +5308,7 @@ app.get('/api/subscription', authenticateToken, async (req, res) => {
             scope: row.scope,
             scopeValue: row.scope_value || null,
             isActive: !!row.is_active,
+            createdAt: row.created_at,
             updatedAt: row.updated_at
         }));
 

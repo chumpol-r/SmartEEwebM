@@ -8,9 +8,7 @@ function cn(...inputs) {
 }
 
 const TIER_META = {
-    free:  { label: 'Web Push',  dot: 'bg-blue-500   ring-blue-400/40' },
-    smart: { label: 'Smart EE',  dot: 'bg-violet-500 ring-violet-400/40' },
-    line:  { label: 'LINE Bot',  dot: 'bg-green-500  ring-green-400/40' },
+    free: { label: 'Web Push', dot: 'bg-blue-500 ring-blue-400/40' },
 };
 
 const SubscribeButton = React.forwardRef(function SubscribeButton(

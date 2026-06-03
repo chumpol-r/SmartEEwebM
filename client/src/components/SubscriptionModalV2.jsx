@@ -6,14 +6,15 @@ import {
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import LineCredentialsGuide from './LineCredentialsGuide.jsx';
+import WebPushDeviceList from './WebPushDeviceList.jsx';
 
 // ── SubscriptionModalV2 ──────────────────────────────────────────────────────
-// A design-variant of SubscriptionModal. BEHAVIOR is identical — it takes the
-// same props (open/onClose/currentTier/webPushSubscribed/channelStatus/onSubmit/
-// onSendTest) and runs the same connect/test flow. Only the visual shell
-// (header, layout, footer) is refreshed. The backend wiring is shared with the
-// header's modal via <SubscriptionContext> (see NotifyConfig.jsx / Layout.jsx),
-// so there is NO duplicated subscription logic and no state drift.
+// The full 3-tier (Web Push / Smart EE / LINE) notification modal used by
+// NotifyConfig. It shares Layout's subscription engine via <SubscriptionContext>
+// (see NotifyConfig.jsx / Layout.jsx), so there is NO duplicated subscription
+// logic and no state drift. NOTE: the header's `SubscriptionModal` was slimmed to
+// Web Push-only, so V1/V2 are no longer behavior-identical — but the Web Push
+// device manager is shared via the `WebPushDeviceList` component below.
 
 function cn(...inputs) {
     return twMerge(clsx(inputs));
@@ -308,6 +309,9 @@ const SubscriptionModalV2 = ({
     channelStatus = {},
     onSubmit,
     onSendTest,
+    devices = [],
+    currentDeviceId = null,
+    onRemoveDevice,
 }) => {
     const [selected, setSelected] = useState('free');
     const [submitting, setSubmitting] = useState(false);
@@ -565,16 +569,16 @@ const SubscriptionModalV2 = ({
                                     </div>
 
                                     <h3 className="text-base font-semibold text-white">{t.name}</h3>
-                                    <p className="mt-0.5 text-xs text-slate-400">{t.price}</p>
+                                    {/* <p className="mt-0.5 text-xs text-slate-400">{t.price}</p> */}
 
-                                    <ul className="mt-4 space-y-1.5">
+                                    {/* <ul className="mt-4 space-y-1.5">
                                         {t.features.map((f) => (
                                             <li key={f} className="flex items-start gap-2 text-xs text-slate-300">
                                                 <Check size={13} className="mt-0.5 text-emerald-400 shrink-0" />
                                                 <span>{f}</span>
                                             </li>
                                         ))}
-                                    </ul>
+                                    </ul> */}
 
                                     <div className={cn(
                                         'mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs',
@@ -640,6 +644,16 @@ const SubscriptionModalV2 = ({
                                         </div>
                                     </div>
                                 )}
+
+                                {/* Web Push device manager — shared with the header modal.
+                                    Lists every Web Push device on the account and removes
+                                    them one at a time (footer's Disable still toggles this
+                                    device, too). */}
+                                <WebPushDeviceList
+                                    devices={devices}
+                                    currentDeviceId={currentDeviceId}
+                                    onRemoveDevice={onRemoveDevice}
+                                />
                             </div>
                         )}
 

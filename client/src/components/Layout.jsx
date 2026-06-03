@@ -158,6 +158,10 @@ const Layout = ({ children }) => {
         smart: { subscribed: false, subscriptionId: null, info: null },
         line:  { subscribed: false, subscriptionId: null, info: null },
     });
+    // Every Web Push device registered to this account (not just this browser).
+    // Powers the device list in the SubscriptionModal so the user can review and
+    // remove subscriptions on other devices.
+    const [webPushDevices, setWebPushDevices] = useState([]);
 
     // Fetch + rebuild all subscription state from the server. Reused on mount
     // and after every mutation so `channelStatus`/`currentTier` never drift.
@@ -172,10 +176,12 @@ const Layout = ({ children }) => {
             // button doesn't show "subscribed" because of another device.
             const myDeviceId = getDeviceId();
             const all = res.data?.data || [];
-            const mine     = all.find(s => s.channel === 'webpush' && s.deviceId === myDeviceId);
+            const webpushAll = all.filter(s => s.channel === 'webpush');
+            const mine     = webpushAll.find(s => s.deviceId === myDeviceId);
             const smartSub = all.find(s => s.channel === 'smart');
             const lineSub  = all.find(s => s.channel === 'line');
 
+            setWebPushDevices(webpushAll);
             setIsSubscribed(!!mine);
             setSubscriptionId(mine?.subscriptionId ?? null);
             setChannelStatus({
@@ -275,6 +281,9 @@ const Layout = ({ children }) => {
             setIsSubscribed(true);
             setSubscriptionId(res.data?.subscriptionId ?? null);
             setShowSubHint(false);
+            // Re-sync `webPushDevices` so the modal's device list shows this
+            // newly-added device immediately (no page refresh needed).
+            await refreshSubscriptions();
         } catch (error) {
             console.error('Error subscribing:', error);
             // Re-throw so the SubscriptionModal surfaces a clean message in its
@@ -305,6 +314,8 @@ const Layout = ({ children }) => {
             });
             setIsSubscribed(false);
             setSubscriptionId(null);
+            // Keep the device list in sync after removing this device.
+            await refreshSubscriptions();
         } catch (error) {
             console.error('Error unsubscribing:', error);
         } finally {
@@ -315,6 +326,36 @@ const Layout = ({ children }) => {
     const handleToggleSubscribe = () => {
         if (subscribing) return;
         return isSubscribed ? handleUnsubscribe() : handleSubscribe();
+    };
+
+    // Remove ANY of the account's Web Push devices by subscription id. For the
+    // current browser we also revoke its push endpoint locally (pushManager);
+    // for other devices we can only deactivate server-side — that browser keeps
+    // a dangling local subscription that simply stops receiving from us.
+    const handleRemoveDevice = async (subId) => {
+        if (subscribing || !subId) return;
+        const dev = webPushDevices.find(d => d.subscriptionId === subId);
+        const isThisDevice = dev?.deviceId === getDeviceId();
+        setSubscribing(true);
+        try {
+            const token = localStorage.getItem('token');
+            if (isThisDevice && 'serviceWorker' in navigator) {
+                try {
+                    const registration = await navigator.serviceWorker.ready;
+                    const sub = await registration.pushManager.getSubscription();
+                    if (sub) await sub.unsubscribe();
+                } catch (_) { /* ignore — still deactivate server-side below */ }
+            }
+            await axios.delete(`/api/subscription/${subId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            await refreshSubscriptions();
+        } catch (error) {
+            console.error('Error removing device:', error);
+            throw error; // surfaced in the modal's per-row error state
+        } finally {
+            setSubscribing(false);
+        }
     };
 
     // Persist a LINE Bot subscription. The backend verifies the token, checks
@@ -461,6 +502,10 @@ const Layout = ({ children }) => {
         channelStatus,
         onSubmit: handleModalSubmit,
         onSendTest: handleSendTest,
+        // Web Push device manager (shared with the header modal)
+        webPushDevices,
+        currentDeviceId: getDeviceId(),
+        onRemoveDevice: handleRemoveDevice,
     };
 
     return (
@@ -676,10 +721,12 @@ const Layout = ({ children }) => {
                                 </div>
                             </div>
 
-                            {/* Subscribe button — opens the SubscriptionModal */}
+                            {/* Subscribe button — opens the Web Push SubscriptionModal.
+                                Reflects Web Push state on THIS device only (smart/line are
+                                managed from NotifyConfig, not this header button). */}
                             <SubscribeButton
                                 onClick={() => { setShowSubHint(false); setSubModalOpen(true); }}
-                                currentTier={currentTier}
+                                currentTier={isSubscribed ? 'free' : null}
                                 busy={subscribing}
                                 open={subModalOpen}
                             />
@@ -731,11 +778,11 @@ const Layout = ({ children }) => {
             <SubscriptionModal
                 open={subModalOpen}
                 onClose={() => setSubModalOpen(false)}
-                currentTier={currentTier}
                 webPushSubscribed={isSubscribed}
-                channelStatus={channelStatus}
                 onSubmit={handleModalSubmit}
-                onSendTest={handleSendTest}
+                devices={webPushDevices}
+                currentDeviceId={getDeviceId()}
+                onRemoveDevice={handleRemoveDevice}
             />
         </div >
         </SubscriptionContext.Provider>

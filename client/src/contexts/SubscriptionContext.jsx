@@ -5,7 +5,8 @@ import { createContext, useContext } from 'react';
 // duplicating the Web Push / LINE / Smart EE wiring. Logic stays single-source
 // in Layout — consumers only get the props a SubscriptionModal needs.
 //
-// Value shape: { currentTier, webPushSubscribed, channelStatus, onSubmit, onSendTest }
+// Value shape: { currentTier, webPushSubscribed, channelStatus, onSubmit, onSendTest,
+//                webPushDevices, currentDeviceId, onRemoveDevice }
 const SubscriptionContext = createContext(null);
 
 export function useSubscription() {

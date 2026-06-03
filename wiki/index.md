@@ -11,7 +11,7 @@ _อัปเดตล่าสุด: 2026-06-02_
 ## Architecture
 - [overview](architecture/overview.md) — ภาพรวม 3 ส่วน (client / API / worker) + DB + deployment.
 - [auth-and-permissions](architecture/auth-and-permissions.md) — custom token (ไม่ใช่ JWT) + ระบบสิทธิ์ Group/Site/Super Group.
-- [realtime-and-notifications](architecture/realtime-and-notifications.md) — REST realtime จาก DB + MQTT→NotifyLog→push (web/LINE/smart) + channel `smart` (relay smarteepro.com) + UI เลือก channel (`ChannelPicker`) + convention สี tier + **Subscription UI** (`SubscriptionModal`: per-channel status, Connected read-only, แยก Connect/Test, `POST /api/subscription/:id/test`) + **share engine ข้ามหน้าด้วย `SubscriptionContext`** (logic อยู่ที่ `Layout`; `SubscriptionModalV2` = design variant ใช้ใน `NotifyConfig`).
+- [realtime-and-notifications](architecture/realtime-and-notifications.md) — REST realtime จาก DB + MQTT→NotifyLog→push (web/LINE/smart) + channel `smart` (relay smarteepro.com) + UI เลือก channel (`ChannelPicker`) + convention สี tier + **Subscription UI 2 ทางเข้า**: header `SubscriptionModal` (V1) = **Web Push-only + device manager** (list/ลบ อุปกรณ์ต่อ account), NotifyConfig `SubscriptionModalV2` = 3-tier เต็ม (Connected read-only, แยก Connect/Test, `POST /api/subscription/:id/test`) + **share engine ข้ามหน้าด้วย `SubscriptionContext`** (logic อยู่ที่ `Layout`).
 
 ## Database
 - [schema-and-conventions](db/schema-and-conventions.md) — SQL Server, naming convention (`c_/n_/u_/dt_`), ลำดับชั้น Group→Site→Serial, ตารางหลัก.

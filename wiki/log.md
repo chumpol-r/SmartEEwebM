@@ -71,6 +71,24 @@ endpoint test). หมายเหตุ: newline จริงของ smart �
 - **`SubscriptionModalV2.jsx`** (ใหม่) — design variant ของ `SubscriptionModal`, behavior เหมือนเป๊ะ
   (form-state/flow คัดลอกตรง), ปรับแค่ shell/header/footer.
 - **`NotifyConfig.jsx`** — ปุ่มที่ header + render V2 ด้วย local open state, ดึง props จาก `useSubscription()`.
+
+## [2026-06-02] ingest | header modal เหลือ Web Push-only + device manager
+รื้อ **`SubscriptionModal.jsx` (V1, ปุ่ม header)** จาก 3-tier เหลือ **Web Push อย่างเดียว** แล้วเพิ่ม
+**device manager** (list อุปกรณ์ทั้งหมดของ account + ลบรายเครื่อง). V2 (`NotifyConfig`) ยัง 3-tier เหมือนเดิม
+→ ทั้งสองเลิก "behavior เหมือนกันเป๊ะ" แล้ว (แชร์ engine `Layout.jsx` ชุดเดิม). หน้าที่แตะ:
+- **architecture/realtime-and-notifications** — เขียนหัวข้อ "Subscription UI" ใหม่เป็น **2 ทางเข้า** +
+  subsection "Web Push device manager" + callout CONTRADICTION (V1≠V2); อัปเดต sources (`:5611` DELETE).
+- **index.md** — ปรับ description.
+จุดสำคัญเชิงโค้ด:
+- `Layout.jsx`: state `webPushDevices` (กรอง `channel==='webpush'` จาก `GET /api/subscription`),
+  handler `handleRemoveDevice` (this-device → `pushManager.unsubscribe()`+DELETE; อื่น → DELETE),
+  และ **subscribe/unsubscribe เพิ่ม `await refreshSubscriptions()`** (เดิมไม่ refresh → list stale จน reload).
+- `SubscriptionModal.jsx`: device list + inline-confirm ลบต่อ row, badge "This device" (match `device_id` กับ
+  `getDeviceId()`), Enable โผล่เฉพาะตอนเครื่องนี้ยังไม่ subscribe.
+- `server/index.js`: `sanitizeDestination` คืน `null` สำหรับ `webpush` (`:5262`, ไม่ส่ง endpoint/keys),
+  response เพิ่ม `createdAt`. ลบใช้ `DELETE /api/subscription/:id` (`:5611`) เดิม.
+โค้ดจริง: `client/src/components/SubscriptionModal.jsx`, `SubscribeButton.jsx`, `Layout.jsx`,
+`server/index.js:5247` (GET), `:5262` (sanitize), `:5611` (DELETE).
 แตะวิกิ: **architecture/realtime-and-notifications** (หัวข้อใหม่ "แชร์ subscription engine ข้ามหน้า"
 + sources) และ **index.md**. ตรวจด้วย `npm run build` (ผ่าน); `npm run lint` ของ repo พังอยู่ก่อนแล้ว
 (ESLint v9 ไม่มี `eslint.config.js` — ไม่เกี่ยวงานนี้).

@@ -327,14 +327,14 @@ const NotifyConfig = () => {
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setSubModalOpen(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 via-violet-600 to-pink-600 hover:opacity-90 text-white rounded-lg transition-opacity shadow-lg shadow-violet-900/30"
+                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 via-violet-600 to-pink-600 hover:opacity-90 text-white rounded-lg transition-opacity shadow-lg shadow-violet-900/30 cursor-pointer"
                     >
                         <BellRing size={18} />
                         <span>Notification Channels</span>
                     </button>
                     <button
                         onClick={() => fetchAll(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors cursor-pointer"
                     >
                         <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
                         <span>Refresh</span>
@@ -631,6 +631,9 @@ const NotifyConfig = () => {
                 channelStatus={subscription.channelStatus}
                 onSubmit={subscription.onSubmit}
                 onSendTest={subscription.onSendTest}
+                devices={subscription.webPushDevices}
+                currentDeviceId={subscription.currentDeviceId}
+                onRemoveDevice={subscription.onRemoveDevice}
             />
         </div>
     );
