@@ -22,6 +22,7 @@
 const { sql } = require('../db');
 const smartEeNotify = require('../utils/smartEeNotify');
 const { DecryptToken } = require('../utils/crypto');
+const { smartReason } = require('../utils/failureReason');
 
 // ---- Tunables ------------------------------------------------------------
 const SMART_POLL_MS  = 5000;
@@ -134,6 +135,19 @@ async function dispatchSmart() {
                     .query(`UPDATE dbo.UserNotificationSubscription
                             SET last_delivered_log_id = @newCursor, updated_at = GETDATE()
                             WHERE subscription_id = @id`);
+            }
+
+            // Record WHY this row failed so it surfaces on the Notify Log page.
+            // The failing row is the first undelivered one (loop breaks on it).
+            // Best-effort: a logging UPDATE must never break the dispatch loop.
+            const failedRow = logs[delivered];
+            if (fatal && failedRow) {
+                try {
+                    await global.dbPool.request()
+                        .input('logId', sql.BigInt, failedRow.log_id)
+                        .input('reason', sql.NVarChar(255), smartReason(fatal))
+                        .query(`UPDATE dbo.NotifyLog SET fail_reason = @reason WHERE log_id = @logId`);
+                } catch (_) { /* swallow — best effort */ }
             }
 
             // A 4xx from the relay means the Group/Pin is no longer valid →

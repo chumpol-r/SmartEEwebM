@@ -1,7 +1,7 @@
 ---
 title: DB Schema & Conventions
 tags: [db, sql-server, schema, convention]
-updated: 2026-05-29
+updated: 2026-06-04
 sources:
   - server/db.js
   - server/utils/idGenerator.js
@@ -23,6 +23,10 @@ ASP/VB เดิม — ตาราง/คอลัมน์จึงใช้ 
     ใช้บน Linux/cloud).
   - บังคับ `Encrypt=Yes; TrustServerCertificate=Yes`.
 - pool เป็น **singleton** `global.dbPool` แปะเป็น `req.db` (`server/index.js:60`).
+- **Resilience (2026-06-04):** `connectToDb` retry แบบ exponential backoff ตอนบูต (env `DB_BOOT_MAX_RETRIES`
+  /`DB_BOOT_RETRY_BASE_MS`/`DB_BOOT_RETRY_CAP_MS`) และ pool มี `pool.on('error')` ที่ auto-reconnect
+  วนไม่จบ (env `DB_RECONNECT_BASE_MS`/`DB_RECONNECT_CAP_MS`) แล้ว **reassign `global.dbPool`**. มี
+  `getPool()` คืน pool ปัจจุบันเสมอ — ใช้แทนการ capture reference. ดู [[realtime-and-notifications]].
 
 ## Naming convention (สำคัญ — ต้องรักษาไว้)
 
@@ -77,7 +81,7 @@ WebSerial (มิเตอร์/ซีเรียล) c_id < 100,000,000
 | ตาราง | บทบาท |
 |-------|--------|
 | `NotifyConfig` | threshold ต่อ `mqtt_serial` + `dbkey` + `level` (point, delay) |
-| `NotifyLog` | log เหตุการณ์ alarm (`log_id`, `mqtt_serial`, `dbkey`, `level`, `value`, `point`, `event_time`, ...) |
+| `NotifyLog` | log เหตุการณ์ alarm (`log_id`, `mqtt_serial`, `dbkey`, `level`, `value`, `point`, `event_time`, `status`, `delivered_count`, `attempts`, `event_type`, `correlation_id`, `c_id`/`owner_type`/`c_name`, **`fail_reason`**) |
 | `UserNotificationSubscription` | subscription ของ web push / LINE / smart (channel column). channel `smart` เก็บ `{ gid, pinCipher }` ใน destination แล้วส่งผ่าน relay smarteepro.com (ไม่ต้องมีตาราง pairing) |
 
 ### Data / Domain

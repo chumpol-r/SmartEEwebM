@@ -1,9 +1,10 @@
 ---
 title: Realtime & Notifications
 tags: [architecture, realtime, mqtt, notification, worker]
-updated: 2026-06-02
+updated: 2026-06-04
 sources:
   - server/worker.js
+  - server/db.js
   - server/workers/mqttNotifier.js
   - server/workers/notifier_logic.js
   - server/workers/webpushDispatcher.js
@@ -11,6 +12,10 @@ sources:
   - server/workers/smartLineDispatcher.js
   - server/utils/smartEeNotify.js
   - server/utils/lineApi.js
+  - server/utils/failureReason.js
+  - server/scripts/add_fail_reason_column.js
+  - server/index.js:6320
+  - client/src/pages/NotifyLog.jsx
   - client/src/contexts/MQTTContext.jsx
   - client/src/components/SetNotifyModal.jsx
   - client/src/components/SubscriptionModal.jsx
@@ -82,6 +87,26 @@ sources:
   ("Smart EE Notification"). โครงเหมือน lineDispatcher เป๊ะ (cursor/scope/batch/dead-sub)
   ต่างกันแค่ match `alarm_type` ด้วย token `smart` และ **ไม่ได้ยิง LINE Messaging API ตรง** —
   ส่งผ่าน relay ของ smarteepro.com (`server/utils/smartEeNotify.js`). ดูหัวข้อ "Channel `smart`".
+
+### เหตุผลที่ส่งไม่สำเร็จ — `NotifyLog.fail_reason` (2026-06-04)
+หน้า Notify Log มีคอลัมน์ **"Failure Reason"** อธิบายว่าทำไม noti ส่งไม่สำเร็จ เป็น **ข้อความอังกฤษ
+อ่านเข้าใจง่าย** (สากล) เก็บใน `dbo.NotifyLog.fail_reason` (NVARCHAR(255)).
+
+- คำแปลทั้งหมดอยู่ที่ util กลาง **`server/utils/failureReason.js`** (`webpushReason`/`webpushAggregateReason`/
+  `lineReason`/`smartReason`) — มี channel prefix (`Web Push:`/`LINE:`/`Smart EE:`). frontend แสดง
+  ค่า raw ตรง ๆ ไม่ต้อง map เอง.
+- ที่มาของ error: web push มาจาก lib (`err.statusCode`/`err.code`); LINE/smart มี `err.code`/`err.status`
+  จาก `lineApi`/`smartEeNotify` อยู่แล้ว.
+- **กติกาเขียน (uniform):** เขียน `fail_reason` **เฉพาะตอน fail เท่านั้น** โดย channel ที่ fail —
+  ไม่มีตัวไหน clear (sticky info = "เหตุผลล่าสุดที่ล้มเหลว"). webpush เขียนใน UPDATE ก้อนเดียวกับ
+  `status='failed'` (aggregate หลายอุปกรณ์เป็น 1 บรรทัด); line/smart เขียนลง row ที่ส่ง fail
+  (best-effort, **ไม่แตะ `status`**).
+- ⚠️ **`status` เป็นของ web push เท่านั้น** (line/smart ใช้ cursor `last_delivered_log_id` ไม่แตะ
+  `status`). ดังนั้น row ที่เป็น LINE-only อาจ `status='sent'` (webpush ข้ามเพราะไม่มี channel `device`)
+  แต่ถ้า LINE ส่งไม่ได้จะมี `fail_reason` — **UI โชว์ `fail_reason` ไม่ขึ้นกับ `status`** จึงเห็นเหตุผล
+  ครบทุก channel.
+- **Deploy:** ต้องรัน `server/scripts/add_fail_reason_column.js` (idempotent) **ก่อน** deploy โค้ดใหม่
+  ทุก environment — ดู [[gotchas]].
 
 ### Channel `smart` — Smart EE LINE relay (ไม่ใช้ LINE Messaging API ตรง)
 LINE bot ตัวนี้ **ไม่ได้คุย LINE Messaging API** แต่ยิงผ่าน relay กลางของ smarteepro.com ซึ่ง
@@ -254,6 +279,26 @@ permission+SW+VAPID), `handleSubscribeLine`/`handleSubscribeSmart`, `handleSendT
 
 > โหมด single-process: ตั้ง `ENABLE_MQTT_WORKER=true` ใน .env ของ API แล้ว index.js จะบูต worker
 > ในตัว (อย่ารัน `worker.js` ซ้ำ) — `server/worker.js:20`.
+
+## Worker resilience (2026-06-04)
+แก้ failure mode ที่อันตรายสุดของ worker — **"ตายเงียบ"** (process ยังขึ้นแต่ไม่ทำงานจริง):
+
+- **DB auto-reconnect (`server/db.js`):** เดิม pool หลุด (SQL restart/failover/network blip) แล้ว
+  ทุก query fail เงียบ → ไม่มี NotifyLog ถูก insert จนกว่าจะ restart มือ. ตอนนี้ `pool.on('error')`
+  rebuild pool ใหม่วนไม่จบแบบ backoff (`DB_RECONNECT_*`) + **reassign `global.dbPool`** → dispatcher
+  ทุกตัว (อ่าน `global.dbPool` สด) self-heal เอง. `mqttNotifier` เลิก capture pool → ใช้ `getPool()`
+  สดทุก tick/message (ถ้า pool กำลัง reconnect = drop message นั้น; `clean:false`+QoS1 ให้ broker
+  เก็บคิวให้).
+- **Boot retry (`server/db.js`):** `connectToDb` retry แบบ exponential backoff ตอนบูต (`DB_BOOT_*`)
+  → ทน worker สตาร์ทก่อน SQL Server ตอน reboot (เดิม fail ทันที → crash-loop).
+- **Global guards (`server/worker.js`):** `unhandledRejection` = log แล้วอยู่ต่อ;
+  `uncaughtException` = log แล้ว `exit(1)` ให้ supervisor restart สะอาด. callback ของ setInterval
+  (config refresh/sweep) ใน `mqttNotifier` ห่อ `.catch()` แล้ว.
+- ⚠️ โหมด single-process (`ENABLE_MQTT_WORKER=true` ใน `index.js`) **ยังไม่มี global guard ชุดนี้**.
+
+> Failure mode อื่นที่ยัง **ค้าง** (ยังไม่แก้): leak ของ `runtimeState` สำหรับ alarm ที่ breach สั้น ๆ
+> แล้วเงียบ (sweep ลบเฉพาะ `raiseLogId != null`); ไม่มี backpressure ตอน message flood; ไม่มี
+> heartbeat/alert เมื่อ MQTT auth fail แล้ว reconnect วนเงียบ. ดูรายการเต็มในบันทึก review 2026-06-04.
 
 ## เกี่ยวข้องกับ
 [[overview]] · [[schema-and-conventions]] · [[gotchas]] · [[003-smart-ee-notification-relay]]

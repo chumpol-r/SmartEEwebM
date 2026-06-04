@@ -29,6 +29,7 @@
 const { sql } = require('../db');
 const lineApi = require('../utils/lineApi');
 const { DecryptToken } = require('../utils/crypto');
+const { lineReason } = require('../utils/failureReason');
 
 // ---- Tunables ------------------------------------------------------------
 const LINE_POLL_MS  = 5000;   // 5s — LINE is less time-critical than browser push
@@ -147,6 +148,20 @@ async function dispatchLine() {
                     .query(`UPDATE dbo.UserNotificationSubscription
                             SET last_delivered_log_id = @newCursor, updated_at = GETDATE()
                             WHERE subscription_id = @id`);
+            }
+
+            // Record WHY this row failed to deliver so it shows on the Notify
+            // Log page. The row that threw is the first undelivered one
+            // (logs[delivered]) since the loop breaks on the first failure.
+            // Best-effort: never let a logging UPDATE break the dispatch loop.
+            const failedRow = logs[delivered];
+            if (fatal && failedRow) {
+                try {
+                    await global.dbPool.request()
+                        .input('logId', sql.BigInt, failedRow.log_id)
+                        .input('reason', sql.NVarChar(255), lineReason(fatal))
+                        .query(`UPDATE dbo.NotifyLog SET fail_reason = @reason WHERE log_id = @logId`);
+                } catch (_) { /* swallow — best effort */ }
             }
 
             // Permanent failures = deactivate the sub. The user gets a

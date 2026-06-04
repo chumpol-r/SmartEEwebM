@@ -22,9 +22,22 @@
 
 require('dotenv').config();
 const webpush = require('web-push');
-const { connectToDb } = require('./db');
+const { connectToDb, getPool } = require('./db');
 
 const LOG_PREFIX = '[worker]';
+
+// ---- Last-resort process guards (C2) -------------------------------------
+// A long-lived background worker must not die from a stray rejection or throw
+// in a callback we didn't wrap. Log loudly; for a truly unknown thrown error
+// (corrupt state) exit so the supervisor (PM2/NSSM) restarts us clean. A
+// rejected promise is usually a transient DB/network hiccup — log and stay up.
+process.on('unhandledRejection', (reason) => {
+    console.error(`${LOG_PREFIX} unhandledRejection:`, reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error(`${LOG_PREFIX} uncaughtException — exiting for restart:`, err);
+    process.exit(1);
+});
 
 // ---- VAPID (mirrors the setup in index.js) -------------------------------
 // Both processes need their own VAPID configuration: index.js uses it to
@@ -50,8 +63,9 @@ if (webpushEnabled) {
 async function main() {
     // 1) DB pool — the MQTT notifier writes to NotifyLog, the dispatcher
     //    reads pending rows and updates them. Both look at global.dbPool.
-    const pool = await connectToDb();
-    global.dbPool = pool;
+    // connectToDb sets global.dbPool and owns auto-reconnect; don't capture
+    // the pool reference here — it can be rebuilt. Use getPool() at shutdown.
+    await connectToDb();
 
     // 2) MQTT notifier (insert NotifyLog when MQTT data breaches a threshold).
     const mqttNotifier = require('./workers/mqttNotifier');
@@ -90,7 +104,8 @@ async function main() {
             lineDispatcher.stop();
             smartLineDispatcher.stop();
             await mqttNotifier.stop();
-            await pool.close();
+            const pool = getPool();
+            if (pool) await pool.close();
         } catch (err) {
             console.error(`${LOG_PREFIX} shutdown error:`, err.message);
         } finally {

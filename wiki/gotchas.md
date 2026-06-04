@@ -1,12 +1,14 @@
 ---
 title: Gotchas & ข้อควรระวัง
 tags: [gotchas, pitfalls]
-updated: 2026-06-01
+updated: 2026-06-04
 sources:
   - server/index.js
   - server/db.js
+  - server/worker.js
   - server/utils/crypto.js
   - server/utils/smartEeNotify.js
+  - server/scripts/add_fail_reason_column.js
   - client/src/components/Layout.jsx
 ---
 
@@ -23,6 +25,11 @@ sources:
 - **ไม่มี ORM/migration** — แก้ schema ด้วย raw SQL/สคริปต์ใน `server/scripts/` เท่านั้น.
 - การต่อ DB ใช้ Windows Auth เป็น default บน dev (`server/db.js`) — บน Linux/cloud ต้องตั้ง
   `DB_TRUSTED=false` + `DB_USER`/`DB_PASS` ไม่งั้นต่อไม่ติด.
+- **`db.js` มี auto-reconnect + boot retry แล้ว** (ตั้งแต่ 2026-06-04): `connectToDb` retry แบบ backoff
+  ตอนบูต (env `DB_BOOT_*`) และ pool มี `pool.on('error')` ที่ rebuild pool ใหม่เอง + **reassign
+  `global.dbPool`** (env `DB_RECONNECT_*`). consumer ที่อ่าน `global.dbPool` สด (dispatcher ทุกตัว) จึง
+  self-heal เอง. โค้ดที่ **capture pool ไว้ครั้งเดียว** ต้องเปลี่ยนมาเรียก `getPool()` แทน ไม่งั้นจะถือ pool
+  ตายหลัง reconnect. ดู [[realtime-and-notifications]] หัวข้อ "Worker resilience".
 
 ## Auth & Security (รับสืบทอดมา — ดู [[002-why-no-jwt]])
 
@@ -51,6 +58,15 @@ sources:
 - ถ้า web push ไม่ส่ง: เช็คว่าตั้ง `VAPID_*` ครบ และ `VAPID_SUBJECT` ขึ้นต้น `mailto:`/`https://`
   (iOS/APNs ตอบ 403 ถ้าเป็นอีเมลเปล่า) — `server/worker.js:32`.
 - อย่ารัน `worker.js` พร้อมกับตั้ง `ENABLE_MQTT_WORKER=true` — จะได้ MQTT notifier ซ้ำสองตัว.
+- **`worker.js` มี global guard แล้ว** (`process.on('unhandledRejection')` = log แล้วอยู่ต่อ,
+  `uncaughtException` = log แล้ว `exit(1)` ให้ supervisor restart). ⚠️ โหมด single-process
+  (`ENABLE_MQTT_WORKER=true` ใน `index.js`) **ยังไม่มี guard ชุดนี้** — ถ้าใช้โหมดนั้นควรเพิ่มเอง.
+
+### Deploy ลำดับสำคัญ: column `fail_reason`
+- ฟีเจอร์ "เหตุผลที่ส่งไม่สำเร็จ" บนหน้า Notify Log ใช้คอลัมน์ `dbo.NotifyLog.fail_reason`
+  (NVARCHAR(255)). **ต้องรัน `node scripts/add_fail_reason_column.js` ก่อน deploy โค้ดใหม่ทุก
+  environment** — ไม่งั้น `/api/notify-log` จะ 500 (SELECT อ้าง column ที่ยังไม่มี) และ webpush UPDATE
+  จะ throw → row ค้าง `pending` วนซ้ำ. สคริปต์ idempotent (รันซ้ำได้). ดู [[realtime-and-notifications]].
 
 ### Smart EE relay (channel `smart` — `server/utils/smartEeNotify.js`)
 - **relay รับ newline จริงไม่ได้** — ส่ง message ที่มี `\n`/`\r\n` (real byte) ไป relay ของ

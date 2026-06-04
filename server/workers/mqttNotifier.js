@@ -24,7 +24,7 @@
 const mqtt = require('mqtt');
 const fs = require('fs');
 const path = require('path');
-const { sql, connectToDb } = require('../db');
+const { sql, connectToDb, getPool } = require('../db');
 const {
     severityOf,
     toNumber,
@@ -443,14 +443,24 @@ async function start() {
     if (started) { console.warn(`${LOG_PREFIX} already started`); return; }
     started = true;
 
-    const pool = global.dbPool || await connectToDb();
-    if (!global.dbPool) global.dbPool = pool;
+    // Establish the pool if nobody has yet. Don't capture the reference: the
+    // pool can be rebuilt by db.js auto-reconnect, so read getPool() live at
+    // every use point. A null pool (mid-reconnect) makes a tick a no-op.
+    if (!global.dbPool) await connectToDb();
 
-    await refreshConfigCache(pool);
-    await recoverActiveAlarms(pool);
+    await refreshConfigCache(getPool());
+    await recoverActiveAlarms(getPool());
 
-    configRefreshTimer = setInterval(() => refreshConfigCache(pool), CONFIG_REFRESH_MS);
-    sweepTimer = setInterval(() => sweepStaleAlarms(pool), STATE_SWEEP_MS);
+    // Wrap timer bodies so a rejected promise can never become an
+    // unhandledRejection that takes the process down. (C2)
+    configRefreshTimer = setInterval(() => {
+        const pool = getPool();
+        if (pool) refreshConfigCache(pool).catch(err => console.error(`${LOG_PREFIX} config refresh tick failed:`, err.message));
+    }, CONFIG_REFRESH_MS);
+    sweepTimer = setInterval(() => {
+        const pool = getPool();
+        if (pool) sweepStaleAlarms(pool).catch(err => console.error(`${LOG_PREFIX} sweep tick failed:`, err.message));
+    }, STATE_SWEEP_MS);
 
     const { url, options } = loadMqttConfig();
     console.log(`${LOG_PREFIX} connecting to ${url} as ${options.clientId}`);
@@ -468,6 +478,14 @@ async function start() {
     mqttClient.on('error',     (err) => console.error(`${LOG_PREFIX} error:`, err.message));
     mqttClient.on('close',     () => console.warn(`${LOG_PREFIX} connection closed`));
     mqttClient.on('message', (topic, payload) => {
+        const pool = getPool();
+        if (!pool) {
+            // Pool is mid-reconnect; drop this message rather than throw. The
+            // broker keeps the persistent session (clean:false) so we'll catch
+            // up on reconnect for QoS1 traffic.
+            console.warn(`${LOG_PREFIX} dropping message on ${topic} — DB pool unavailable`);
+            return;
+        }
         handleMessage(pool, topic, payload).catch(err => {
             console.error(`${LOG_PREFIX} unhandled error:`, err);
         });

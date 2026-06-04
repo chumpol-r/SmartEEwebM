@@ -6348,7 +6348,7 @@ app.get('/api/notify-log', authenticateToken, async (req, res) => {
             SELECT log_id, notify_id, serial_id, mqtt_serial, gateway_id,
                    dbkey, level, value, point, message, alarm_type,
                    event_time, status, sent_at, delivered_count, attempts, created_at,
-                   event_type, correlation_id,
+                   event_type, correlation_id, fail_reason,
                    c_id, owner_type, c_name
             FROM dbo.NotifyLog
             ${whereClause}
@@ -6381,6 +6381,7 @@ app.get('/api/notify-log', authenticateToken, async (req, res) => {
                 createdAt: r.created_at,
                 eventType: r.event_type,
                 correlationId: r.correlation_id != null ? Number(r.correlation_id) : null,
+                failReason: r.fail_reason || null,
                 cId: r.c_id,
                 ownerType: r.owner_type,
                 cName: r.c_name,

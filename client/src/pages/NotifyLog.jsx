@@ -211,6 +211,7 @@ const NotifyLog = () => {
             'Message':        r.message || '',
             'Alarm Type':     r.alarmType || '',
             'Status':         r.status || '',
+            'Failure Reason': r.failReason || '',
             'Event Time':     r.eventTime ? fmt(r.eventTime) : '',
         }));
         const ws = XLSX.utils.json_to_sheet(data);
@@ -246,6 +247,7 @@ const NotifyLog = () => {
                 (r.message || '').toLowerCase().includes(search) ||
                 (r.alarmType || '').toLowerCase().includes(search) ||
                 (r.status || '').toLowerCase().includes(search) ||
+                (r.failReason || '').toLowerCase().includes(search) ||
                 (r.eventType || '').toLowerCase().includes(search);
             if (!hit) return false;
         }
@@ -353,20 +355,21 @@ const NotifyLog = () => {
                                 <th className="px-3 py-3">Message</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Channels</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Status</th>
+                                <th className="px-3 py-3">Failure Reason</th>
                                 <th className="px-3 py-3 whitespace-nowrap">Event Time</th>
                             </tr>
                         </thead>
                         <tbody>
                             {loading ? (
                                 <tr>
-                                    <td colSpan="10" className="py-12 text-center text-slate-400">
+                                    <td colSpan="11" className="py-12 text-center text-slate-400">
                                         <RefreshCw size={20} className="animate-spin inline mr-2" />
                                         Loading...
                                     </td>
                                 </tr>
                             ) : filteredRows.length === 0 ? (
                                 <tr>
-                                    <td colSpan="10" className="py-12 text-center text-slate-400">
+                                    <td colSpan="11" className="py-12 text-center text-slate-400">
                                         {search && dateRangeActive && !invalidRange ? (
                                             <>
                                                 <div className="mb-2">
@@ -456,6 +459,15 @@ const NotifyLog = () => {
                                         </td>
                                         <td className="px-3 py-2.5">
                                             <Badge value={r.status} colorMap={STATUS_COLORS} />
+                                        </td>
+                                        <td className="px-3 py-2.5 max-w-xs">
+                                            {r.failReason ? (
+                                                <span className="text-red-300 text-xs leading-snug block truncate" title={r.failReason}>
+                                                    {r.failReason}
+                                                </span>
+                                            ) : (
+                                                <span className="text-slate-600">-</span>
+                                            )}
                                         </td>
                                         <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap text-xs">{fmt(r.eventTime)}</td>
                                     </tr>

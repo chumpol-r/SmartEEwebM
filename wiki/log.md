@@ -92,3 +92,36 @@ endpoint test). หมายเหตุ: newline จริงของ smart �
 แตะวิกิ: **architecture/realtime-and-notifications** (หัวข้อใหม่ "แชร์ subscription engine ข้ามหน้า"
 + sources) และ **index.md**. ตรวจด้วย `npm run build` (ผ่าน); `npm run lint` ของ repo พังอยู่ก่อนแล้ว
 (ESLint v9 ไม่มี `eslint.config.js` — ไม่เกี่ยวงานนี้).
+
+## [2026-06-04] ingest | Worker resilience (DB reconnect / boot retry / global guards)
+แก้ failure mode "ตายเงียบ" ของ worker MQTT→NotifyLog (C1–C3). โค้ดจริง:
+- **`server/db.js`** — `connectToDb` boot retry + backoff (env `DB_BOOT_*`); `pool.on('error')`
+  auto-reconnect วนไม่จบ (env `DB_RECONNECT_*`) + reassign `global.dbPool`; เพิ่ม `getPool()`.
+- **`server/worker.js`** — `process.on('unhandledRejection')` (อยู่ต่อ) + `uncaughtException` (exit 1);
+  shutdown ปิด `getPool()` แทน reference ที่ capture.
+- **`server/workers/mqttNotifier.js`** — ใช้ `getPool()` สดทุก tick/message แทน capture; ห่อ
+  callback ของ setInterval ด้วย `.catch()`; drop message ถ้า pool กำลัง reconnect.
+ทดสอบจริง: unit (notifier_logic 48/48), C1 (emit pool error → auto-reconnect succeeded, query หลัง
+ผ่าน), C2 (spawn worker.js: unhandledRejection→อยู่ต่อ, uncaughtException→exit 1), C3 (mock
+sql.connect: 4 attempts, backoff 100/200/400, giving up→throw). แตะวิกิ:
+**realtime-and-notifications** (หัวข้อ "Worker resilience" + failure mode ที่ยังค้าง),
+**db/schema-and-conventions** (env + getPool), **gotchas**, **index.md**.
+
+## [2026-06-04] ingest | NotifyLog.fail_reason — เหตุผลที่ส่งไม่สำเร็จ (3 channel)
+เพิ่มคอลัมน์ "Failure Reason" บนหน้า Notify Log — ข้อความอังกฤษ friendly อธิบายว่าทำไม noti
+ส่งไม่สำเร็จ ครอบคลุม web push / LINE / smart. โค้ดจริง:
+- **`server/scripts/add_fail_reason_column.js`** (ใหม่) — เพิ่ม `dbo.NotifyLog.fail_reason`
+  NVARCHAR(255) (idempotent). ⚠️ ต้องรัน**ก่อน** deploy โค้ดใหม่.
+- **`server/utils/failureReason.js`** (ใหม่) — map error→ข้อความอังกฤษ + channel prefix
+  (`webpushReason`/`webpushAggregateReason`/`lineReason`/`smartReason`).
+- **`webpushDispatcher.js`** — เขียน `fail_reason` ใน UPDATE ก้อนเดียวกับ `status='failed'` (aggregate
+  หลายอุปกรณ์); **`lineDispatcher.js`/`smartLineDispatcher.js`** — เขียน `fail_reason` ลง row ที่
+  fail (best-effort, ไม่แตะ `status`).
+- **`server/index.js:6320`** `/api/notify-log` — SELECT + map `failReason`.
+- **`client/src/pages/NotifyLog.jsx`** — คอลัมน์ใหม่ (โชว์ไม่ขึ้นกับ status, สีแดง+tooltip), search,
+  Excel export, colSpan 10→11.
+กติกา: `fail_reason` เขียนเฉพาะตอน fail (sticky, ไม่ clear). ข้อจำกัด: `status` เป็น webpush-only
+(line/smart ใช้ cursor) → UI โชว์ `fail_reason` แยกจาก status. ทดสอบจริง: unit 14/14 +
+integration บน DB จริง (insert→webpush-fail UPDATE→อ่านกลับ→LINE overwrite ไม่แตะ status→cleanup) ผ่าน.
+แตะวิกิ: **realtime-and-notifications** (หัวข้อ "เหตุผลที่ส่งไม่สำเร็จ"), **db/schema-and-conventions**
+(column), **gotchas** (ลำดับ deploy), **index.md**.

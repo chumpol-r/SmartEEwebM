@@ -17,6 +17,7 @@
 
 const webpush = require('web-push');
 const { sql } = require('../db');
+const { webpushAggregateReason } = require('../utils/failureReason');
 
 // ---- Tunables ------------------------------------------------------------
 const WEBPUSH_POLL_MS = 3000;
@@ -168,7 +169,9 @@ async function dispatchWebPush() {
                 try {
                     subscription = JSON.parse(s.destination);
                 } catch (_) {
-                    return { delivered: false };
+                    // Surface as a recognisable error so the reason mapper can
+                    // tell the user the saved subscription is corrupt.
+                    return { delivered: false, err: { code: 'bad_subscription' } };
                 }
                 try {
                     await sendNotificationWithTimeout(subscription, payload, WEBPUSH_TIMEOUT_MS);
@@ -190,24 +193,36 @@ async function dispatchWebPush() {
                     } else {
                         console.error(`[webpush] send failed (sub ${s.subscription_id}):`, err.statusCode || err.message);
                     }
-                    return { delivered: false };
+                    return { delivered: false, err };
                 }
             }));
             const delivered = sendResults.reduce(
                 (n, r) => n + (r.status === 'fulfilled' && r.value.delivered ? 1 : 0),
                 0
             );
+            // Collect the errors behind every non-delivered send so we can
+            // store ONE human-readable reason when the whole row fails.
+            const failerrors = sendResults
+                .filter(r => r.status === 'fulfilled' && !r.value.delivered && r.value.err)
+                .map(r => r.value.err);
 
             // matched>0 but none delivered -> 'failed'; otherwise 'sent'.
             const newStatus = (subs.length > 0 && delivered === 0) ? 'failed' : 'sent';
+            // fail_reason is only ever written on failure (sticky, informational).
+            // On 'sent' we pass NULL but DON'T touch any reason a LINE/smart
+            // dispatcher may have set — this main path only runs for rows routed
+            // to 'device', and a fresh device row starts with fail_reason NULL.
+            const failReason = newStatus === 'failed' ? webpushAggregateReason(failerrors) : null;
             await global.dbPool.request()
                 .input('logId', sql.BigInt, row.log_id)
                 .input('count', sql.Int, delivered)
                 .input('status', sql.VarChar, newStatus)
+                .input('failReason', sql.NVarChar(255), failReason)
                 .query(`
                     UPDATE dbo.NotifyLog
                     SET status = @status, sent_at = GETDATE(),
-                        delivered_count = @count, attempts = attempts + 1
+                        delivered_count = @count, attempts = attempts + 1,
+                        fail_reason = @failReason
                     WHERE log_id = @logId
                 `);
             console.log(`[webpush] log ${row.log_id} ${row.mqtt_serial}/${row.dbkey} ${row.level} -> ${delivered}/${subs.length} device(s) [${newStatus}]`);
