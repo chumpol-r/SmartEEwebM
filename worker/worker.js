@@ -12,19 +12,79 @@
 //   * iisnode is HTTP-only — it has no place to run a long-lived background
 //     worker. Run this file as a separate Windows Service instead, e.g. via
 //     `node-windows` or NSSM:
-//       nssm install SmartEEWorker "C:\Program Files\nodejs\node.exe" "C:\Workspaces\SmartEEweb\server\worker.js"
-//       nssm set    SmartEEWorker AppDirectory "C:\Workspaces\SmartEEweb\server"
+//       nssm install SmartEEWorker "C:\Program Files\nodejs\node.exe" "C:\Workspaces\SmartEEweb\worker\worker.js"
+//       nssm set    SmartEEWorker AppDirectory "C:\Workspaces\SmartEEweb\worker"
 //       nssm start  SmartEEWorker
 //   * On Linux, use PM2 / systemd to keep this process alive.
 //
 // In single-process / legacy setups, set ENABLE_MQTT_WORKER=true in the API's
 // .env and DON'T start this file — index.js will boot both pieces itself.
+//
+// STANDALONE: this folder is self-contained — it carries its own copy of db.js
+// and utils/ (crypto, lineApi, failureReason, smartEeNotify) plus its own .env,
+// so it can run/deploy without the server/ folder present. NOTE: db.js and
+// utils/crypto.js are duplicated from server/ — keep the two copies in sync.
 
-require('dotenv').config();
+const path = require('path');
+// Load this folder's own .env (standalone) regardless of the process cwd.
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+const http = require('http');
 const webpush = require('web-push');
 const { connectToDb, getPool } = require('./db');
 
 const LOG_PREFIX = '[worker]';
+
+// ---- Health/status HTTP server -------------------------------------------
+// The worker runs on its own port (WORKER_PORT) — separate from the API — so
+// it can be monitored, health-checked and restarted independently. If this
+// port (or the whole worker) dies, the frontend and API keep running.
+//   dev  default 3005, prod (PM2 env) 3004.
+const WORKER_PORT = parseInt(process.env.WORKER_PORT || '3005', 10);
+
+// Live component status, surfaced by GET /status. Updated as main() boots.
+const status = {
+    startedAt: new Date().toISOString(),
+    components: {
+        db: false,
+        mqttNotifier: false,
+        webpushDispatcher: false,
+        lineDispatcher: false,
+        smartLineDispatcher: false,
+    },
+};
+
+function startHealthServer() {
+    const server = http.createServer((req, res) => {
+        const url = (req.url || '').split('?')[0];
+        res.setHeader('Content-Type', 'application/json');
+        if (url === '/health') {
+            res.writeHead(200);
+            res.end(JSON.stringify({ status: 'ok' }));
+            return;
+        }
+        if (url === '/status') {
+            res.writeHead(200);
+            res.end(JSON.stringify({
+                status: 'ok',
+                uptimeSec: Math.round(process.uptime()),
+                startedAt: status.startedAt,
+                webpushEnabled,
+                components: status.components,
+            }));
+            return;
+        }
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'not found' }));
+    });
+    // EADDRINUSE etc. must not crash the worker — log and keep the loops alive.
+    server.on('error', (err) => {
+        console.error(`${LOG_PREFIX} health server error:`, err.message);
+    });
+    server.listen(WORKER_PORT, () => {
+        console.log(`${LOG_PREFIX} health server on http://localhost:${WORKER_PORT} (/health, /status)`);
+    });
+    return server;
+}
 
 // ---- Last-resort process guards (C2) -------------------------------------
 // A long-lived background worker must not die from a stray rejection or throw
@@ -65,17 +125,24 @@ async function main() {
     //    reads pending rows and updates them. Both look at global.dbPool.
     // connectToDb sets global.dbPool and owns auto-reconnect; don't capture
     // the pool reference here — it can be rebuilt. Use getPool() at shutdown.
+    // 0) Health/status HTTP server — start first so a supervisor can probe the
+    //    process while the heavier components below are still booting.
+    const healthServer = startHealthServer();
+
     await connectToDb();
+    status.components.db = true;
 
     // 2) MQTT notifier (insert NotifyLog when MQTT data breaches a threshold).
     const mqttNotifier = require('./workers/mqttNotifier');
     await mqttNotifier.start();
+    status.components.mqttNotifier = true;
 
     // 3) Web push dispatcher (pick up pending NotifyLog rows, send webpush).
     let dispatcher = null;
     if (webpushEnabled) {
         dispatcher = require('./workers/webpushDispatcher');
         dispatcher.start();
+        status.components.webpushDispatcher = true;
     } else {
         console.warn(`${LOG_PREFIX} dispatcher NOT started (VAPID missing)`);
     }
@@ -84,11 +151,13 @@ async function main() {
     //    Independent of VAPID — runs whenever there are active LINE subscriptions.
     const lineDispatcher = require('./workers/lineDispatcher');
     lineDispatcher.start();
+    status.components.lineDispatcher = true;
 
     // 5) Smart EE LINE dispatcher (channel='smart'): same cursor/scope flow but
     //    forwards messages through the smarteepro.com relay (not LINE API direct).
     const smartLineDispatcher = require('./workers/smartLineDispatcher');
     smartLineDispatcher.start();
+    status.components.smartLineDispatcher = true;
 
     // ---- Graceful shutdown ------------------------------------------------
     // Stop the loops first so they don't write to a closed pool, then close
@@ -100,6 +169,7 @@ async function main() {
         shuttingDown = true;
         console.log(`${LOG_PREFIX} ${signal} received, shutting down...`);
         try {
+            if (healthServer) healthServer.close();
             if (dispatcher) dispatcher.stop();
             lineDispatcher.stop();
             smartLineDispatcher.stop();
@@ -115,7 +185,7 @@ async function main() {
     process.on('SIGINT',  () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-    console.log(`${LOG_PREFIX} ready — MQTT notifier + webpush dispatcher running`);
+    console.log(`${LOG_PREFIX} ready — MQTT notifier + webpush dispatcher running (port ${WORKER_PORT})`);
 }
 
 main().catch(err => {

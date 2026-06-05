@@ -1,0 +1,24 @@
+{
+  "name": "smartee-worker",
+  "version": "1.0.0",
+  "description": "SmartEE Web background worker — MQTT notifier + web push / LINE dispatchers",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "dev": "nodemon worker.js",
+    "test": "node --test workers/notifier_logic.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "mqtt": "^5.15.1",
+    "msnodesqlv8": "^5.2.0",
+    "mssql": "^10.0.1",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

@@ -6409,10 +6409,12 @@ app.get('/api/notify-log', authenticateToken, async (req, res) => {
 // produce duplicate push notifications.
 if (process.env.ENABLE_MQTT_WORKER === 'true') {
     console.log('[workers] ENABLE_MQTT_WORKER=true → starting MQTT notifier + dispatcher in-process');
-    const mqttNotifier = require('./workers/mqttNotifier');
-    const webpushDispatcher = require('./workers/webpushDispatcher');
-    const lineDispatcher = require('./workers/lineDispatcher');
-    const smartLineDispatcher = require('./workers/smartLineDispatcher');
+    // Workers now live in the top-level worker/ folder (run as a separate
+    // process by default). This legacy in-process path reaches into it.
+    const mqttNotifier = require('../worker/workers/mqttNotifier');
+    const webpushDispatcher = require('../worker/workers/webpushDispatcher');
+    const lineDispatcher = require('../worker/workers/lineDispatcher');
+    const smartLineDispatcher = require('../worker/workers/smartLineDispatcher');
     connectToDb()
         .then(pool => {
             global.dbPool = pool;

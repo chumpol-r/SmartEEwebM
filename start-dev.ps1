@@ -54,6 +54,22 @@ if (Test-Port 5173) {
     }
 }
 
+if (Test-Port 3005) {
+    Write-Host "⚠️  Port 3005 is already in use (Worker)" -ForegroundColor Yellow
+    $response = Read-Host "Do you want to kill the process and continue? (y/n)"
+    if ($response -eq 'y') {
+        $processes = Get-NetTCPConnection -LocalPort 3005 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($proc in $processes) {
+            Stop-Process -Id $proc -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "✅ Killed process on port 3005" -ForegroundColor Green
+        Start-Sleep -Seconds 2
+    } else {
+        Write-Host "❌ Cancelled" -ForegroundColor Red
+        exit 1
+    }
+}
+
 Write-Host ""
 Write-Host "🔧 Starting Backend Server..." -ForegroundColor Cyan
 
@@ -79,6 +95,15 @@ try {
 }
 
 Write-Host ""
+Write-Host "📨 Starting Worker (MQTT / notifications)..." -ForegroundColor Cyan
+
+# Start Worker in new window (own process, own folder, own port — independent of API)
+$workerPath = Join-Path $currentDir "worker"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$workerPath'; Write-Host '📨 Worker' -ForegroundColor Magenta; npm run dev"
+
+Write-Host "✅ Worker starting on http://localhost:3005 (/health, /status)" -ForegroundColor Green
+
+Write-Host ""
 Write-Host "🎨 Starting Frontend Server..." -ForegroundColor Cyan
 
 # Start Frontend in new window
@@ -94,6 +119,7 @@ Write-Host ""
 Write-Host "📍 URLs:" -ForegroundColor Cyan
 Write-Host "   Frontend: http://localhost:5173" -ForegroundColor White
 Write-Host "   Backend:  http://localhost:3002" -ForegroundColor White
+Write-Host "   Worker:   http://localhost:3005/health" -ForegroundColor White
 Write-Host "   Health:   http://localhost:3002/api/health" -ForegroundColor White
 Write-Host ""
 Write-Host "💡 Tips:" -ForegroundColor Cyan

@@ -22,7 +22,8 @@ const mqtt = require('mqtt');
 const fs = require('fs');
 const path = require('path');
 const { sql, connectToDb } = require('../db');
-const { enrichPayload } = require('../workers/notifier_logic');
+// notifier_logic now lives in the standalone worker/ package.
+const { enrichPayload } = require('../../worker/workers/notifier_logic');
 
 // ---- Args ----------------------------------------------------------------
 const args = process.argv.slice(2);

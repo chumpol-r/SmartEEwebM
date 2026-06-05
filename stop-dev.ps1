@@ -44,6 +44,13 @@ Write-Host "🔍 Checking Frontend Preview (port 4173)..." -ForegroundColor Cyan
 Stop-ProcessOnPort -Port 4173 -Name "Frontend Preview"
 
 Write-Host ""
+
+# Stop Worker (dev 3005 / prod 3004)
+Write-Host "🔍 Checking Worker (ports 3005, 3004)..." -ForegroundColor Cyan
+Stop-ProcessOnPort -Port 3005 -Name "Worker (dev)"
+Stop-ProcessOnPort -Port 3004 -Name "Worker (prod)"
+
+Write-Host ""
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Gray
 Write-Host ""
 Write-Host "✅ All development servers stopped!" -ForegroundColor Green
